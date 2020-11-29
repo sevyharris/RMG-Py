@@ -3331,7 +3331,7 @@ class KineticsFamily(Database):
                                                             template_rxn_map={entry.label: template_rxn_map[entry.label]},
                                                             obj=obj, T=T, nprocs=procs_out - 1, depth=depth,
                                                             min_splitable_entry_num=min_splitable_entry_num,
-                                                            min_rxns_to_spawn=min_rxns_to_spawn)
+                                                            min_rxns_to_spawn=min_rxns_to_spawn,extension_iter_max=extension_iter_max)
                         active_procs.append(p)
                         active_conns.append(conn)
                         proc_names.append(name)
