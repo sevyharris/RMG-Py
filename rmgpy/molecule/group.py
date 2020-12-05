@@ -1509,6 +1509,8 @@ class Group(Graph):
                 label_list.append(k.label)
             for k in sorted(label_list):
                 atom_type_i_str += k
+        elif len(atom_type_i) == 0:
+            atom_type_i_str = ""
         else:
             atom_type_i_str = atom_type_i[0].label
         if len(atom_type_j) > 1:
@@ -1517,6 +1519,8 @@ class Group(Graph):
                 label_list.append(k.label)
             for p in sorted(label_list):
                 atom_type_j_str += p
+        elif len(atom_type_j) == 0:
+            atom_type_j_str = ""
         else:
             atom_type_j_str = atom_type_j[0].label
 
@@ -1548,6 +1552,8 @@ class Group(Graph):
                 label_list.append(k.label)
             for p in sorted(label_list):
                 atom_type_str += p
+        elif len(atom_type) == 0:
+            atom_type_str = ""
         else:
             atom_type_str = atom_type[0].label
 
