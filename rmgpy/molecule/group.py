@@ -1414,7 +1414,7 @@ class Group(Graph):
                     labelList.append(k.label)
                 for p in sorted(labelList):
                     old_atom_type_str += p
-            elif len(atom_type) == 0:
+            elif len(old_atom_type) == 0:
                 old_atom_type_str = ""
             else:
                 old_atom_type_str = old_atom_type[0].label
