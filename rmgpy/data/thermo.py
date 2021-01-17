@@ -1563,21 +1563,25 @@ class ThermoDatabase(object):
 
         
         # if len(molecule) > 1, it will assume all resonance structures have already been generated when it tries to generate them, so evaluate each configuration separately and pick the lowest energy one by H298 value
-        thermo_models = []
+        gas_phase_species = []
         for dummy_molecule in dummy_molecules:
             dummy_species = Species()
             dummy_species.molecule = [dummy_molecule]
             dummy_species.generate_resonance_structures()
-            thermo = self.get_thermo_data(dummy_species)
-            thermo_models.append(thermo)
+            dummy_species.thermo = self.get_thermo_data(dummy_species)
+            gas_phase_species.append(dummy_species)
             
         # define the comparison function to find the lowest energy
-        def lowest_energy(thermo_model):
-            return thermo_model.H298.value
+        def lowest_energy(species):
+            if hasattr(species.thermo, 'H298'):
+                return species.thermo.H298.value
+            else:
+                return species.thermo.get_enthalpy(298.0)
 
-        thermo = min(thermo_models, key=lowest_energy)
+        species = min(gas_phase_species, key=lowest_energy)
 
-        thermo.comment = "Gas phase thermo from {0}. Adsorption correction:".format(thermo.comment)
+        thermo = species.thermo
+        thermo.comment = f"Gas phase thermo for {thermo.label or species.molecule[0].to_smiles()} from {thermo.comment}. Adsorption correction:"
         logging.debug("Using thermo from gas phase for species {}\n".format(species.label) + repr(thermo))
 
         if not isinstance(thermo, ThermoData):
@@ -1604,7 +1608,7 @@ class ThermoDatabase(object):
         add_thermo_data(thermo, adsorption_thermo, group_additivity=True)
 
         if thermo.label:
-            thermo.label += 'X'
+            thermo.label += 'X'*len(adsorbed_atoms)
 
         find_cp0_and_cpinf(species, thermo)
         return thermo
