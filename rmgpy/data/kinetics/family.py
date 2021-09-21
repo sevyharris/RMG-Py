@@ -4508,9 +4508,10 @@ class KineticsFamily(Database):
         # check whether we're using the old rate rule templates or the new tree nodes
         if full_comment_string.find('for rate rule') < 0:
             rate_rule_string = full_comment_string.split("Estimated from node", 1)[1].strip()
-            template = '???'
-            rules = '???'
-            training_entries = '???'
+            node = rate_rule_string.split()[0].strip()  # cut off anything on the end
+            rules = ''
+            training_entries = ''
+            template = ''
         else:
             # The rate rule string is right after the phrase 'for rate rule'
             rate_rule_string = full_comment_string.split("for rate rule", 1)[1].strip()
@@ -4525,12 +4526,13 @@ class KineticsFamily(Database):
 
             template = self.retrieve_template(template_label.split(';'))
             rules, training_entries = self.get_sources_for_template(template)
+            node = ''
 
             if not template:
                 raise ValueError('Could not extract kinetics source from comments for reaction {}.'.format(reaction))
 
         source_dict = {'template': template, 'degeneracy': degeneracy, 'exact': exact,
-                       'rules': rules, 'training': training_entries}
+                       'rules': rules, 'training': training_entries, 'node': node}
 
         # Source of the kinetics is from rate rules
         return False, [self.label, source_dict]
