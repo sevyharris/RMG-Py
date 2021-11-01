@@ -3608,6 +3608,7 @@ class KineticsFamily(Database):
         derivative_list = np.array(pool.map(_compute_rule_sensitivity, inputs[inds]), dtype=object)
         derivative_list = derivative_list[revinds]  # fix order
         for i, rule_key in enumerate(self.rules.entries.keys()):
+            # the extra tab comes from rmgpy/data/kinetics/common.py line 111
             # Get rid of previous sensitivities
             while 'sensitivities' in self.rules.entries[rule_key][0].long_desc:
                 match = re.search(r'\nsensitivities .*]', self.rules.entries[rule_key][0].long_desc)
