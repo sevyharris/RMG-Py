@@ -3605,9 +3605,13 @@ class KineticsFamily(Database):
         revinds = [inds.index(x) for x in np.arange(len(inputs))]
 
         pool = mp.Pool(nprocs)
-        derivative_list = np.array(pool.map(_compute_rule_sensitivity, inputs[inds]))
+        derivative_list = np.array(pool.map(_compute_rule_sensitivity, inputs[inds]), dtype=object)
         derivative_list = derivative_list[revinds]  # fix order
         for i, rule_key in enumerate(self.rules.entries.keys()):
+            # Get rid of previous sensitivities
+            while 'sensitivities' in self.rules.entries[rule_key][0].long_desc:
+                match = re.search(r'\nsensitivities .*]', self.rules.entries[rule_key][0].long_desc)
+                self.rules.entries[rule_key][0].long_desc = self.rules.entries[rule_key][0].long_desc.replace(match[0], '')
             self.rules.entries[rule_key][0].long_desc += f'\nsensitivities = {derivative_list[i]}'
         # for i, kinetics in enumerate(kinetics_list):
         #     if kinetics is not None:
@@ -3646,7 +3650,7 @@ class KineticsFamily(Database):
         rxnlists = [(template_rxn_map[entry.label], entry.label)
                     if entry.label in template_rxn_map.keys() else [] for entry in entries]
         inputs = np.array([(self.forward_recipe.actions, rxns, Tref, fmax, label, [r.rank for r in rxns])
-                           for rxns, label in rxnlists])
+                           for rxns, label in rxnlists], dtype=object)
 
         inds = np.arange(len(inputs))
         np.random.shuffle(inds)  # want to parallelize in random order
