@@ -3607,7 +3607,7 @@ class KineticsFamily(Database):
         pool = mp.Pool(nprocs)
         derivative_list = np.array(pool.map(_compute_rule_sensitivity, inputs[inds]))
         derivative_list = derivative_list[revinds]  # fix order
-        for rule_key in self.rules.entries.keys():
+        for i, rule_key in enumerate(self.rules.entries.keys()):
             self.rules.entries[rule_key][0].long_desc += f'\nsensitivities = {derivative_list[i]}'
         # for i, kinetics in enumerate(kinetics_list):
         #     if kinetics is not None:
