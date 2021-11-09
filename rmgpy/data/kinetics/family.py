@@ -3586,34 +3586,57 @@ class KineticsFamily(Database):
         function to compute sensitivities of nodes with resepect to training reactions
         assumes the tree has already been generated
         """
-        # rule_keys = self.rules.entries.keys()
-        # for entry in self.groups.entries.values():
-        #     if entry.label not in rule_keys:
-        #         self.rules.entries[entry.label] = []
+        rule_keys = self.rules.entries.keys()
+        for entry in self.groups.entries.values():
+            if entry.label not in rule_keys:
+                self.rules.entries[entry.label] = []
 
         index = max([e.index for e in self.rules.get_entries()] or [0]) + 1
 
         entries = list(self.groups.entries.values())
         rxnlists = [(template_rxn_map[entry.label], entry.label)
                     if entry.label in template_rxn_map.keys() else [] for entry in entries]
+                    
         inputs = np.array([(self.forward_recipe.actions, rxns, Tref, fmax, label, [r.rank for r in rxns])
-                           for rxns, label in rxnlists])
+                           for rxns, label in rxnlists], dtype=object)
+        
+        # inds = np.arange(len(inputs))
+        # np.random.shuffle(inds)  # want to parallelize in random order
+        # inds = inds.tolist()
+        # revinds = [inds.index(x) for x in np.arange(len(inputs))]
 
-        inds = np.arange(len(inputs))
-        np.random.shuffle(inds)  # want to parallelize in random order
-        inds = inds.tolist()
-        revinds = [inds.index(x) for x in np.arange(len(inputs))]
 
+        # pool = mp.Pool(nprocs)
+        # derivative_list = np.array(pool.map(_compute_rule_sensitivity, inputs[inds]), dtype=object)
+        # derivative_list = derivative_list[revinds]  # fix order
+
+        # don't change order
         pool = mp.Pool(nprocs)
-        derivative_list = np.array(pool.map(_compute_rule_sensitivity, inputs[inds]), dtype=object)
-        derivative_list = derivative_list[revinds]  # fix order
+        derivative_list = np.array(pool.map(_compute_rule_sensitivity, inputs), dtype=object)
+
+
+        matching_entries = 0
         for i, rule_key in enumerate(self.rules.entries.keys()):
             # the extra tab comes from rmgpy/data/kinetics/common.py line 111
             # Get rid of previous sensitivities
+            if len(self.rules.entries[rule_key]) < 1:
+                continue
+            derivative_index = -1
+            for j, en in enumerate(entries):
+                if en.label == rule_key:
+                    derivative_index = j
+                    break
+            if derivative_index < 0:
+                print("node label not found")
             while 'sensitivities' in self.rules.entries[rule_key][0].long_desc:
                 match = re.search(r'\nsensitivities .*]', self.rules.entries[rule_key][0].long_desc)
                 self.rules.entries[rule_key][0].long_desc = self.rules.entries[rule_key][0].long_desc.replace(match[0], '')
-            self.rules.entries[rule_key][0].long_desc += f'\nsensitivities = {derivative_list[i]}'
+            self.rules.entries[rule_key][0].long_desc += f'\nsensitivities = {derivative_list[derivative_index]}'
+            tokens = self.rules.entries[rule_key][0].long_desc.split()
+            n_train = int(tokens[4])
+            if len(derivative_list[i]) == n_train:
+                matching_entries += 1
+        print(f'{matching_entries} out of {len(self.rules.entries.keys())} matching entries')
         # for i, kinetics in enumerate(kinetics_list):
         #     if kinetics is not None:
         #         entry = entries[i]
@@ -3666,6 +3689,8 @@ class KineticsFamily(Database):
         for i, kinetics in enumerate(kinetics_list):
             if kinetics is not None:
                 entry = entries[i]
+                if entry.label == 'Root_Ext-2R!H-R':
+                    print('Is this really 6?')
                 std = kinetics.uncertainty.get_expected_log_uncertainty() / 0.398  # expected uncertainty is std * 0.398
                 st = "BM rule fitted to {0} training reactions at node {1}".format(len(rxnlists[i][0]), entry.label)
                 st += "\nTotal Standard Deviation in ln(k): {0}".format(std)
