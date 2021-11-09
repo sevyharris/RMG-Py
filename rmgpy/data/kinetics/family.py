@@ -3614,8 +3614,6 @@ class KineticsFamily(Database):
         pool = mp.Pool(nprocs)
         derivative_list = np.array(pool.map(_compute_rule_sensitivity, inputs), dtype=object)
 
-
-        matching_entries = 0
         for i, rule_key in enumerate(self.rules.entries.keys()):
             # the extra tab comes from rmgpy/data/kinetics/common.py line 111
             # Get rid of previous sensitivities
@@ -3632,11 +3630,7 @@ class KineticsFamily(Database):
                 match = re.search(r'\nsensitivities .*]', self.rules.entries[rule_key][0].long_desc)
                 self.rules.entries[rule_key][0].long_desc = self.rules.entries[rule_key][0].long_desc.replace(match[0], '')
             self.rules.entries[rule_key][0].long_desc += f'\nsensitivities = {derivative_list[derivative_index]}'
-            tokens = self.rules.entries[rule_key][0].long_desc.split()
-            n_train = int(tokens[4])
-            if len(derivative_list[i]) == n_train:
-                matching_entries += 1
-        print(f'{matching_entries} out of {len(self.rules.entries.keys())} matching entries')
+
         # for i, kinetics in enumerate(kinetics_list):
         #     if kinetics is not None:
         #         entry = entries[i]
@@ -4784,7 +4778,7 @@ def _compute_rule_sensitivity(rr):
                                   'dA_dEa': sensitivity_A_dEa,
                                   'dE0_dEa': sensitivity_E0_dEa,
                                   'dn_dEa': sensitivity_n_dEa,
-                                  'name': str(rxn)})
+                                  'name': str(rxn)}) # TODO change this to training_rxn_name
 
         return sensitivities
 
