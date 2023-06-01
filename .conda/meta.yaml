@@ -13,7 +13,8 @@ requirements:
   build:
     - {{ compiler('c') }} # [unix]
     - quantities  # [x]
-    - cython >=0.25.2  # [x]
+    - cython
+    #- cython >=0.25.2  # [x]
     - pydas >=1.0.3
     - pydqed >=1.0.3  # [x] new
     - pyrdl  # [x]
@@ -21,7 +22,8 @@ requirements:
     - setuptools  # ???? is this one old?
     - numpy >=1.10.0  # new # [x]
   host:
-    - cython >=0.25.2  # [x]
+    - cython
+    #- cython >=0.25.2  # [x]
     # - numpy  # old # [x]
     - numpy >=1.10.0  # new # [x]
     - openbabel >=3  # old # [x] -- moved to conda-forge
@@ -58,7 +60,8 @@ requirements:
     - chemprop  # [x] - we would like to stop maintaining this
     - coolprop  # [x]
     - coverage  # [x]
-    - cython >=0.25.2  # [x]
+    - cython
+    #- cython >=0.25.2  # [x]
     - ffmpeg  # [x]
     - gprof2dot  # [x]  - we maintain this
     - graphviz  # [x]
