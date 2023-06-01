@@ -1,7 +1,7 @@
 # For conda build
 package:
   name: rmg
-  version: 3.1.0
+  version: 3.2.0
 
 source:
   path: ../
@@ -12,64 +12,100 @@ build:
 requirements:
   build:
     - {{ compiler('c') }} # [unix]
+    - quantities  # [x]
+    - cython >=0.25.2  # [x]
+    - pydas >=1.0.3
+    - pydqed >=1.0.3  # [x] new
+    - pyrdl  # [x]
+    - python >=3.7
+    - setuptools  # ???? is this one old?
+    - numpy >=1.10.0  # new # [x]
   host:
-    - cython >=0.25.2
-    - lpsolve55
-    - numpy
-    - openbabel >=3
-    - pydas >=1.0.2
-    - pydqed >=1.0.1
-    - pyrdl
+    - cython >=0.25.2  # [x]
+    # - numpy  # old # [x]
+    - numpy >=1.10.0  # new # [x]
+    - openbabel >=3  # old # [x] -- moved to conda-forge
     - python
-    - quantities
-    - rdkit >=2018
-    - scipy
-    - setuptools
+    # - rdkit >=2018  # old # [x]
+    - rdkit >=2020.03.3.0  # [x]
+    - scipy  # [x]
+    - setuptools  # ???? is this one old?
+    # packages we maintain
+    # - pydas >=1.0.2  # [x] old
+    # - pydqed >=1.0.1    # [x] old
+    # - pydas >=1.0.3  # [x] new -- moved to build
+    - pydas >=1.0.3  # [x] new
+    - pydqed >=1.0.3  # [x] new
+    - pyrdl  # [x]
+    - quantities  # [x]
+    - lpsolve55  # [x]
+    # - rmg::gprof2dot
+    # - rmg::lpsolve55
+    # - rmg::muq2
+    # - rmg::numdifftools
+    # - rmg::pydas >=1.0.3
+    # - rmg::pydqed >=1.0.3
+    # - rmg::pyrdl
+    # - rmg::pyrms
+    # - rmg::quantities
+    # - rmg::symmetry
   run:
-    - cairo
-    - cairocffi
-    - cantera >=2.3.0
-    - cclib >=1.6.3
-    - chemprop
-    - coolprop
-    - coverage
-    - cython >=0.25.2
-    - ffmpeg
-    - gprof2dot
-    - graphviz
-    - h5py
-    - jinja2
-    - jupyter
-    - lpsolve55
-    - markupsafe
-    - matplotlib >=1.5
-    - mopac
-    - mpmath
-    - muq2
-    - networkx
-    - nose
-    - numdifftools
-    - {{ pin_compatible('numpy') }}
-    - openbabel >=3
-    - pandas
-    - psutil
-    - pydas >=1.0.2
+    - cairo  # [x]
+    - cairocffi  # [x]
+    # - cantera >=2.3.0
+    - cantera =2.6  # [x]
+    - cclib >=1.6.3  # [x]  -- conda-forge
+    - chemprop  # [x] - we would like to stop maintaining this
+    - coolprop  # [x]
+    - coverage  # [x]
+    - cython >=0.25.2  # [x]
+    - ffmpeg  # [x]
+    - gprof2dot  # [x]  - we maintain this
+    - graphviz  # [x]
+    - h5py  # [x]
+    - jinja2  # [x]
+    - jupyter  # [x]
+    - lpsolve55  # [x]  - we maintain this
+    - markupsafe  # [x]
+    - matplotlib >=1.5 # [x]
+    - mopac  # [x]  - moved to conda-forge
+    - mpmath  # [x]
+    - muq2  # [x]  - we maintain this
+    - networkx  # [x]
+    - nose  # [x]
+    - numdifftools  # [x]  - we maintain this
+    - {{ pin_compatible('numpy') }}  # [x] don't know what this line does
+    - openbabel >=3  # [x]  - conda-forge
+    - pandas  # [x]
+    - psutil  # [x]
+    # - pydas >=1.0.2  # [x] old - we maintain this
+    - pydas >=1.0.3  # [x]  - we maintain this
     - pydot
-    - pydqed >=1.0.1
-    - pymongo
-    - pyparsing
-    - pyrdl
-    - python
-    - pyyaml
-    - pyzmq
+    # - pydqed >=1.0.1  # [x] old - we maintain this
+    - pydqed >=1.0.3  # [x]  - we maintain this
+    - pymongo  # [x]
+    - pyparsing  # [x]
+    - pyrdl  # [x]  - we maintain this
+    - python  # [x]  version number?
+    - pyyaml  # [x]
+    # - pyzmq  # Nowhere to be found. Delete this? [x]
     - quantities
-    - rdkit >=2018
-    - rmgdatabase >=3.1.0
-    - scikit-learn
-    - scipy
-    - symmetry
-    - xlrd
-    - xlwt
+    # - rdkit >=2018  # old [x]
+    - rdkit >=2020.03.3.0  # [x]
+    - rmgdatabase >=3.2.0  # [x]
+    - scikit-learn  # [x]
+    - scipy  # [x]
+    - symmetry  # [x] - we maintain this
+    - xlrd  # [x]
+    - xlwt  # [x]
+    # new things
+    - julia >=1.8.5  # [x] NEW - we would like to use conda-forge version
+    - ncurses  # [x] NEW - we would like to use conda-forge version
+    - nomkl  # [x] NEW - we would like to stop maintaining this
+    - numdifftools  # [x] NEW - we maintain this
+    - pyjulia  # [x] NEW - would like to use conda-forge version
+    - pyrms  # [x] NEW - we maintain this
+    - suitesparse  # [x] NEW - we would like to use conda-forge version
 test:
   source_files:
     - 'examples/rmg/superminimal'
@@ -78,7 +114,7 @@ test:
     - rmgpy
     - arkane
   commands:
-    - rmg.py examples/rmg/superminimal/input.py # [unix]
+    - rmg.py examples/rmg/superminimal/input.py  # [unix]
     - Arkane.py examples/arkane/networks/n-butanol/input.py # [unix]
     - python %SCRIPTS%\rmg.py examples\rmg\superminimal\input.py # [win]
     - python %SCRIPTS\Arkane.py examples\arkane\networks\n-butanol\input.py # [win]
