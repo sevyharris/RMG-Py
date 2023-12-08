@@ -223,6 +223,7 @@ class ReactorDelayModPiece(muqm.PyModPiece):
         # Create a vector to hold the ModPiece output, which will be the mole fraction of the output species of interest
         output = np.zeros(self.outputSizes[0])
 
+        # Extract the ignition delay using the pressure data...
         for i in range(self.num_conditions):
             assert all_data[i][0].label == 'Time'
             times = all_data[i][0].data
@@ -236,19 +237,6 @@ class ReactorDelayModPiece(muqm.PyModPiece):
             ignite_index = np.argmax(slopes)
 
             output[i] = times[ignite_index]
-
-        # Extract the ignition delay using the pressure data...
-
-        # Extract the final time point for each of the mole fractions within the output_species_list
-
-        # for i in range(self.num_conditions):
-        #     for j in range(self.num_output_species):
-        #         species_index = self.output_species_indices[j]
-        #         species_generic_data = all_data[i][1][2:]
-        #         if self.logx:
-        #             output[i * self.num_output_species + j] = np.log(species_generic_data[species_index].data[-1])
-        #         else:
-        #             output[i * self.num_output_species + j] = species_generic_data[species_index].data[-1]
 
         if not self.correlated:
             # Now reset the cantera object's species_list and reaction_list back to original thermo and kinetics 
@@ -322,12 +310,11 @@ class ReactorPCEFactory(object):
         6. Perform PCE analysis of desired outputs
     """
 
-    def __init__(self, cantera, output_species_list, k_params, k_uncertainty, g_params, g_uncertainty, 
+    def __init__(self, cantera, k_params, k_uncertainty, g_params, g_uncertainty, 
                  correlated=False, logx=True):
 
-        self.reactor_mod = ReactorModDelayPiece(
+        self.reactor_mod = ReactorDelayModPiece(
             cantera=cantera,
-            output_species_list=output_species_list,
             k_params=k_params,
             k_uncertainty=k_uncertainty,
             g_params=g_params,
@@ -404,17 +391,20 @@ Condition {0}
 ------------------------------------------------------------
 {1!s}
 ============================================================
-Condition {0} {2}Mole Fractions Evaluated at Test Point
+Condition {0} {2}Ignition Delays Evaluated at Test Point
 ------------------------------------------------------------
-Species                      True Output          PCE Output
+                            True Output          PCE Output
 ------------------------------------------------------------
 """.format(i + 1, self.reactor_mod.cantera.conditions[i], 'Log ' if self.logx else '')
-
-            for j, outputSpecies in enumerate(self.reactor_mod.output_species_list):
-                output_index = i * self.reactor_mod.num_output_species + j
-                output += '{0:<20}{1:>20.3f}{2:>20.3f}\n'.format(outputSpecies.to_chemkin(),
-                                                                 true_output[output_index],
-                                                                 pce_output[output_index])
+            output_index = i
+            
+            # print(f'output_index {output_index}')
+            # print(true_output[output_index])
+            # print(pce_output[output_index])
+            output += '{0:>20.3f}{1:>20.3f}\n'.format(
+                true_output[output_index],
+                pce_output[output_index]
+            )
             output += '============================================================\n'
 
         if log:
@@ -456,13 +446,12 @@ Condition {0} {2}Mole Fractions
 Species                   Mean         Stddev     Stddev (%)
 ------------------------------------------------------------
 """.format(i + 1, self.reactor_mod.cantera.conditions[i], 'Log ' if self.logx else '')
-
-            for j, output_species in enumerate(self.reactor_mod.output_species_list):
-                output_index = i * self.reactor_mod.num_output_species + j
-                output += '{0:<15}{1:>15.3e}{2:>15.3e}{3:>15.3f}\n'.format(output_species.to_chemkin(),
-                                                                           mean[output_index],
-                                                                           stddev[output_index],
-                                                                           stddev_percent[output_index])
+            output_index = i
+            output += '{0:>15.3e}{1:>15.3e}{2:>15.3f}\n'.format(
+                mean[output_index],
+                stddev[output_index],
+                stddev_percent[output_index]
+            )
             output += '============================================================\n\n'
 
             if self.reactor_mod.k_params:
@@ -472,20 +461,18 @@ Condition {0} Reaction Rate Sensitivity Indices
 Description                                                                 sens_main     sens_total
 """.format(i + 1)
 
-                for j, output_species in enumerate(self.reactor_mod.output_species_list):
-                    output += '----------------------------------------------------------------------------------------------------\n'
-                    output_index = i * self.reactor_mod.num_output_species + j
-                    for k, descriptor in enumerate(self.reactor_mod.k_params):
-                        parameter_index = k
-                        if not self.reactor_mod.correlated:
-                            description = 'dln[{0}]/dln[{1}]'.format(output_species.to_chemkin(),
-                                                                     self.reactor_mod.cantera.reaction_list[descriptor].to_chemkin(kinetics=False))
-                        else:
-                            description = 'dln[{0}]/dln[{1}]'.format(output_species.to_chemkin(), descriptor)
+                output += '----------------------------------------------------------------------------------------------------\n'
+                output_index = i
+                for k, descriptor in enumerate(self.reactor_mod.k_params):
+                    parameter_index = k
+                    if not self.reactor_mod.correlated:
+                        description = 'dln[tau]/dln[{0}]'.format(self.reactor_mod.cantera.reaction_list[descriptor].to_chemkin(kinetics=False))
+                    else:
+                        description = 'dln[tau]/dln[{0}]'.format(descriptor)
 
-                        output += '{0:<70}{1:>14.3f}%{2:>14.3f}%\n'.format(description,
-                                                                           100 * main_sens[output_index][parameter_index],
-                                                                           100 * total_sens[output_index][parameter_index])
+                    output += '{0:<70}{1:>14.3f}%{2:>14.3f}%\n'.format(description,
+                                                                        100 * main_sens[output_index][parameter_index],
+                                                                        100 * total_sens[output_index][parameter_index])
                 output += '====================================================================================================\n\n'
 
             if self.reactor_mod.g_params:
@@ -494,20 +481,18 @@ Condition {0} Thermochemistry Sensitivity Indices
 ----------------------------------------------------------------------------------------------------
 Description                                                                 sens_main     sens_total
 """.format(i + 1)
-                for j, output_species in enumerate(self.reactor_mod.output_species_list):
-                    output += '----------------------------------------------------------------------------------------------------\n'
-                    output_index = i * self.reactor_mod.num_output_species + j
-                    for g, descriptor in enumerate(self.reactor_mod.g_params):
-                        parameter_index = len(self.reactor_mod.k_params) + g
-                        if not self.reactor_mod.correlated:
-                            description = 'dln[{0}]/dG[{1}]'.format(output_species.to_chemkin(),
-                                                                    self.reactor_mod.cantera.species_list[descriptor].to_chemkin())
-                        else:
-                            description = 'dln[{0}]/dG[{1}]'.format(output_species.to_chemkin(), descriptor)
+                output += '----------------------------------------------------------------------------------------------------\n'
+                output_index = i
+                for g, descriptor in enumerate(self.reactor_mod.g_params):
+                    parameter_index = len(self.reactor_mod.k_params) + g
+                    if not self.reactor_mod.correlated:
+                        description = 'dln[tau]/dG[{0}]'.format(self.reactor_mod.cantera.species_list[descriptor].to_chemkin())
+                    else:
+                        description = 'dln[tau]/dG[{0}]'.format(descriptor)
 
-                        output += '{0:<70}{1:>14.3f}%{2:>14.3f}%\n'.format(description,
-                                                                           100 * main_sens[output_index][parameter_index],
-                                                                           100 * total_sens[output_index][parameter_index])
+                    output += '{0:<70}{1:>14.3f}%{2:>14.3f}%\n'.format(description,
+                                                                        100 * main_sens[output_index][parameter_index],
+                                                                        100 * total_sens[output_index][parameter_index])
                 output += '====================================================================================================\n\n'
 
         if log:
