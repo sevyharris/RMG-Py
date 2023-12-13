@@ -878,7 +878,17 @@ cdef class PDepArrhenius(PDepKineticsModel):
         pressures = copy.deepcopy(self._pressures.value_si)
         ctArrhenius = [arr.to_cantera_kinetics(arrhenius_class=True) for arr in self.arrhenius]
 
-        new_rates = ct.PlogRate(list(zip(pressures, ctArrhenius)))
+        if isinstance(ctArrhenius[0], list):
+            # need to unpack the list of lists
+            unpackedCtArrhenius = []
+            unpackedPressures = []
+            for i, multiArrh in enumerate(self.arrhenius):
+                for arrh in multiArrh.arrhenius:
+                    unpackedCtArrhenius.append(arrh.to_cantera_kinetics(arrhenius_class=True))
+                    unpackedPressures.append(pressures[i])
+            new_rates = ct.PlogRate(list(zip(unpackedPressures, unpackedCtArrhenius)))
+        else:
+            new_rates = ct.PlogRate(list(zip(pressures, ctArrhenius)))
         ct_reaction.rate = new_rates
 
 ################################################################################
@@ -998,6 +1008,20 @@ cdef class MultiArrhenius(KineticsModel):
 
         for i, arr in enumerate(self.arrhenius):
             arr.set_cantera_kinetics(ct_reaction[i], species_list)
+
+    def to_cantera_kinetics(self, arrhenius_class=False):
+        """
+        Converts the RMG Arrhenius object to a cantera ArrheniusRate or
+        the auxiliary cantera Arrhenius class (used by falloff reactions). 
+        Inputs for both are (A,b,E)  where A is in units of m^3/kmol/s, b is dimensionless, and E is in J/kmol
+
+        arrhenius_class: If ``True``, uses cantera.Arrhenius (for falloff reactions). If ``False``, uses 
+        Cantera.ArrheniusRate
+        """
+
+        return [arrh.to_cantera_kinetics() for arrh in self.arrhenius]
+
+
 
 ################################################################################
 
