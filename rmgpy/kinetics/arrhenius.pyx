@@ -882,9 +882,15 @@ cdef class PDepArrhenius(PDepKineticsModel):
             # need to unpack the list of lists
             unpackedCtArrhenius = []
             unpackedPressures = []
+
+
             for i, multiArrh in enumerate(self.arrhenius):
-                for arrh in multiArrh.arrhenius:
-                    unpackedCtArrhenius.append(arrh.to_cantera_kinetics(arrhenius_class=True))
+                if hasattr(multiArrh, 'arrhenius'):
+                    for arrh in multiArrh.arrhenius:
+                        unpackedCtArrhenius.append(arrh.to_cantera_kinetics(arrhenius_class=True))
+                        unpackedPressures.append(pressures[i])
+                else:
+                    unpackedCtArrhenius.append(ctArrhenius[i])
                     unpackedPressures.append(pressures[i])
             new_rates = ct.PlogRate(list(zip(unpackedPressures, unpackedCtArrhenius)))
         else:

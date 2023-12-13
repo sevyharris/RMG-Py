@@ -248,7 +248,7 @@ class Cantera(object):
 
         self.conditions = generate_cantera_conditions(reactor_type_list, reaction_time_list, mol_frac_list, Tlist, Plist, Vlist)
 
-    def load_model(self):
+    def load_model(self, allow_negative_A=False):
         """
         Load a cantera Solution model from the job's own species_list and reaction_list attributes
         """
@@ -257,7 +257,7 @@ class Cantera(object):
 
         self.reaction_map = {}
         ct_reactions = []
-        for rxn in self.reaction_list:
+        for i, rxn in enumerate(self.reaction_list):
             index = len(ct_reactions)
 
             converted_reactions = rxn.to_cantera(self.species_list, use_chemkin_identifier=True)
@@ -270,6 +270,11 @@ class Cantera(object):
                 ct_reactions.append(converted_reactions)
 
             self.reaction_map[self.reaction_list.index(rxn)] = indices
+
+        if allow_negative_A:
+            for reaction in ct_reactions:
+                if isinstance(reaction.rate, ct._cantera.ArrheniusRate) and reaction.rate.pre_exponential_factor < 0:
+                    reaction.rate.allow_negative_pre_exponential_factor = True
 
         self.model = ct.Solution(thermo='IdealGas', kinetics='GasKinetics',
                                  species=ct_species, reactions=ct_reactions)
@@ -410,6 +415,10 @@ class Cantera(object):
                 cantera_reactor = ct.IdealGasConstPressureReactor(contents=self.model)
             elif condition.reactor_type == 'IdealGasConstPressureTemperatureReactor':
                 cantera_reactor = ct.IdealGasConstPressureReactor(contents=self.model, energy='off')
+            elif condition.reactor_type == 'ShockTube':
+                env = ct.Reservoir(ct.Solution('air.yaml'))
+                cantera_reactor = ct.IdealGasReactor(self.model)
+                wall = ct.Wall(cantera_reactor, env, A=1.0, velocity=0)
             else:
                 raise Exception('Other types of reactor conditions are currently not supported')
 
