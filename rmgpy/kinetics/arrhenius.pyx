@@ -878,7 +878,7 @@ cdef class PDepArrhenius(PDepKineticsModel):
         pressures = copy.deepcopy(self._pressures.value_si)
         ctArrhenius = [arr.to_cantera_kinetics(arrhenius_class=True) for arr in self.arrhenius]
 
-        if isinstance(ctArrhenius[0], list):
+        if any([isinstance(x, list) for x in ctArrhenius]):
             # need to unpack the list of lists
             unpackedCtArrhenius = []
             unpackedPressures = []
