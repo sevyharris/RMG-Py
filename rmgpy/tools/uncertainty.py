@@ -4,7 +4,7 @@
 #                                                                             #
 # RMG - Reaction Mechanism Generator                                          #
 #                                                                             #
-# Copyright (c) 2002-2023 Prof. William H. Green (whgreen@mit.edu),           #
+# Copyright (c) 2002-2021 Prof. William H. Green (whgreen@mit.edu),           #
 # Prof. Richard H. West (r.west@neu.edu) and the RMG Team (rmg_dev@mit.edu)   #
 #                                                                             #
 # Permission is hereby granted, free of charge, to any person obtaining a     #
@@ -69,7 +69,8 @@ class ThermoParameterUncertainty(object):
             dG += self.dG_GAV  # Add a fixed uncertainty for the GAV method
             for group_type, group_entries in source['GAV'].items():
                 group_weights = [groupTuple[-1] for groupTuple in group_entries]
-                dG += np.sum([weight * weight * self.dG_group for weight in group_weights])
+                # dG += np.sum([weight * weight * self.dG_group for weight in group_weights])
+                dG += np.sum([weight * self.dG_group for weight in group_weights])
 
         return dG
 
@@ -100,7 +101,8 @@ class ThermoParameterUncertainty(object):
                     group_list = source['GAV'][corr_group_type]
                     for group, weight in group_list:
                         if group == corr_param:
-                            return weight * weight * self.dG_group
+                            # return weight * weight * self.dG_group
+                            return weight * self.dG_group
 
         elif corr_source_type == 'Estimation':
             if 'GAV' in source:
@@ -178,17 +180,21 @@ class KineticParameterUncertainty(object):
 
             if not exact:
                 # nonexactness contribution increases as N increases
-                dlnk += np.log10(N + 1) * np.log10(N + 1) * self.dlnk_nonexact
+                # dlnk += np.log10(N + 1) * np.log10(N + 1) * self.dlnk_nonexact
+                dlnk += np.log10(N + 1) * self.dlnk_nonexact
 
             # Add the contributions from rules
-            dlnk += np.sum([weight * weight * self.dlnk_rule for weight in rule_weights])
+            # dlnk += np.sum([weight * weight * self.dlnk_rule for weight in rule_weights])
+            dlnk += np.sum([weight * self.dlnk_rule for weight in rule_weights])
+
             # Add the contributions from training
             # Even though these source from training reactions, we actually
             # use the uncertainty for rate rules, since these are now approximations
             # of the original reaction.  We consider these to be independent of original the training
             # parameters because the rate rules may be reversing the training reactions,
             # which leads to more complicated dependence
-            dlnk += np.sum([weight * weight * self.dlnk_rule for weight in training_weights])
+            # dlnk += np.sum([weight * weight * self.dlnk_rule for weight in training_weights])
+            dlnk += np.sum([weight * self.dlnk_rule for weight in training_weights])
 
         return dlnk
 
@@ -211,11 +217,13 @@ class KineticParameterUncertainty(object):
                     if rules:
                         for ruleEntry, weight in rules:
                             if corr_param == ruleEntry:
-                                return weight * weight * self.dlnk_rule
+                                # return weight * weight * self.dlnk_rule
+                                return weight * self.dlnk_rule
                     if training:
                         for ruleEntry, trainingEntry, weight in training:
                             if corr_param == ruleEntry:
-                                return weight * weight * self.dlnk_rule
+                                # return weight * weight * self.dlnk_rule
+                                return weight * self.dlnk_rule
 
         # Writing it this way in the function is not the most efficient, but makes it easy to use, and
         # testing a few if statements is not too costly
@@ -246,7 +254,8 @@ class KineticParameterUncertainty(object):
                 N = len(source_dict['rules']) + len(source_dict['training'])
                 if not exact:
                     # nonexactness contribution increases as N increases
-                    dlnk += np.log10(N + 1) * np.log10(N + 1) * self.dlnk_nonexact
+                    # dlnk += np.log10(N + 1) * np.log10(N + 1) * self.dlnk_nonexact
+                    dlnk += np.log10(N + 1) * self.dlnk_nonexact
                 return dlnk
         else:
             raise Exception('Kinetics correlated source must be Rate Rules, Library, PDep, Training, or Estimation')
