@@ -4302,7 +4302,6 @@ class KineticsFamily(Database):
 
         for line in lines:
             if 'Ea raised from' in line:
-                print('how is this handled?')
                 break
 
         regex = r"\[(.*)\]"  # only hit outermost brackets
@@ -4358,14 +4357,8 @@ class KineticsFamily(Database):
                 if start_loc == -1:
                     raise ValueError('Could not find start of node in comments')
                 if end_loc == -1:
-                    # check if the nodename is the last token
-                    node_tokens = full_comment_string.split()
-                    if node_tokens[-2] == 'node':
-                        end_loc = None
-                    else:
-                        end_loc = None
-                        print(f'Warning: Could not find end of node in comments {full_comment_string}')
-                        # raise ValueError('Could not find end of node in comments')
+                    # There's no " Multiplied by reaction path degeneracy" so go to the end. 
+                    end_loc = None
 
                 node = full_comment_string[start_loc + len(start_tag): end_loc]
                 node = node.replace('\\n', '')
