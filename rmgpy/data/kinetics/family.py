@@ -4390,6 +4390,9 @@ class KineticsFamily(Database):
                     re.sub(r"(?<!]) \+ (?!Average)", "','",     # + sign between non-averages
                     comment)))))))
 
+                if "['" in eval_comment_string and "']" not in eval_comment_string:
+                    eval_comment_string = eval_comment_string.replace("]", "']")
+
                 entry_nested_list = eval(eval_comment_string)
 
                 weighted_entries = assign_weights_to_entries(entry_nested_list, [])
@@ -4433,8 +4436,8 @@ class KineticsFamily(Database):
                             'degeneracy': degeneracy,
                             'exact': boolean_exact?,
                             'rules': a list of (original rate rule entry, weight in average)
-                            'training': a list of (original rate rule entry associated with training entry, original training entry, weight in average)}]
-
+                            'training': a list of (original rate rule entry associated with training entry, original training entry, weight in average)
+                            'node': a string with info about the BM tree node}]
 
         where Exact is a boolean of whether the rate is an exact match, Template is
         the reaction template used, RateRules is a list of the rate rule entries containing
@@ -4478,25 +4481,63 @@ class KineticsFamily(Database):
         # Extract the rate rule information
         full_comment_string = reaction.kinetics.comment.replace('\n', ' ')
 
-        # The rate rule string is right after the phrase 'for rate rule'
-        rate_rule_string = full_comment_string.split("for rate rule", 1)[1].strip()
+        # Check whether we're using the old rate rule templates or the new BM tree nodes
+        if full_comment_string.find('for rate rule') < 0:  # New trees
+            matches = []
+            matches = re.search(r'This reaction matched rate rule \[(.*?)\]', full_comment_string)
+            if matches:
+                node = matches[1]
+                node = node.replace('\\n', '')
+                node = node.replace('# ', '')
+                node = node.replace('! ', '')
+                node = node.replace(' ', '')
+                node = ''.join(node.split())
+                assert ' ' not in node, 'problem extracting node name for exact match'
+            else:
+                start_tag = 'Estimated from node '
+                end_tag = 'Multiplied by reaction path degeneracy'
 
-        if rate_rule_string[0] == '[':
-            # Get the contents of the capture group in the regex
-            # Remove any spaces which may be left over as a result of a line break
-            template_label = re.split(regex, rate_rule_string)[1].replace(' ', '')
-        else:
-            # If this has the line 'From training reaction # for rate rule node1;node2'
-            template_label = rate_rule_string.split()[0]
+                start_loc = full_comment_string.find(start_tag)
+                end_loc = full_comment_string.find(end_tag)
+                if start_loc == -1:
+                    raise ValueError('Could not find start of node in comments')
+                if end_loc == -1:
+                    # There's no " Multiplied by reaction path degeneracy" so go to the end. 
+                    end_loc = None
 
-        template = self.retrieve_template(template_label.split(';'))
-        rules, training_entries = self.get_sources_for_template(template)
+                node = full_comment_string[start_loc + len(start_tag): end_loc]
+                node = node.replace('\\n', '')
+                node = node.replace('# ', '')
+                node = node.replace('! ', '')
+                node = node.replace(' ', '')
+                node = ''.join(node.split())
+                assert ' ' not in node, 'problem extracting node name for estimate'
 
-        if not template:
-            raise ValueError('Could not extract kinetics source from comments for reaction {}.'.format(reaction))
+            rules = ''
+            training_entries = ''
+            template = ''
+        else:  # Old trees
+            # The rate rule string is right after the phrase 'for rate rule'
+            rate_rule_string = full_comment_string.split("for rate rule", 1)[1].strip()
+
+            if rate_rule_string[0] == '[':
+                # Get the contents of the capture group in the regex
+                # Remove any spaces which may be left over as a result of a line break
+                template_label = re.split(regex, rate_rule_string)[1].replace(' ', '')
+            else:
+                # If this has the line 'From training reaction # for rate rule node1;node2'
+                template_label = rate_rule_string.split()[0]
+
+            template = self.retrieve_template(template_label.split(';'))
+            rules, training_entries = self.get_sources_for_template(template)
+
+            node = ''
+
+            if not template:
+                raise ValueError('Could not extract kinetics source from comments for reaction {}.'.format(reaction))
 
         source_dict = {'template': template, 'degeneracy': degeneracy, 'exact': exact,
-                       'rules': rules, 'training': training_entries}
+                       'rules': rules, 'training': training_entries, 'node': node}
 
         # Source of the kinetics is from rate rules
         return False, [self.label, source_dict]
