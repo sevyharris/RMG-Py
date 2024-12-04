@@ -1131,8 +1131,8 @@ class KineticsFamily(Database):
             return
 
         # Determine number of parallel processes.
-        from rmgpy.rmg.main import determine_procnum_from_ram
-        procnum = determine_procnum_from_ram()
+        #from rmgpy.rmg.main import determine_procnum_from_ram
+        #procnum = determine_procnum_from_ram()
 
         tentries = depository.entries
 
@@ -1243,12 +1243,12 @@ class KineticsFamily(Database):
                             products=[Species(molecule=[m.molecule[0].copy(deep=True)], label=m.label)
                                       for m in entry.item.products])
 
-            if procnum > 1:
-                # If QMTP and multiprocessing write QMTP files here in parallel.
-                from rmgpy.rmg.input import get_input
-                quantum_mechanics = get_input('quantum_mechanics')
-                if quantum_mechanics:
-                    quantum_mechanics.run_jobs(item.reactants + item.products, procnum=procnum)
+            #if procnum > 1:
+            #    # If QMTP and multiprocessing write QMTP files here in parallel.
+            #    from rmgpy.rmg.input import get_input
+            #    quantum_mechanics = get_input('quantum_mechanics')
+            #    if quantum_mechanics:
+            #        quantum_mechanics.run_jobs(item.reactants + item.products, procnum=procnum)
 
             if entry.facet is None:
                 metal = entry.metal # could be None
