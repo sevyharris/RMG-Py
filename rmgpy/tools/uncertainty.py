@@ -469,6 +469,7 @@ class Uncertainty(object):
                 source_dict = source['Rate Rules'][1]
                 rules = source_dict['rules']
                 training = source_dict['training']
+                node = source_dict['node']
                 if rules:
                     rule_entries = [ruleTuple[0] for ruleTuple in rules]
                     if family_label not in all_kinetic_sources['Rate Rules']:
@@ -483,6 +484,11 @@ class Uncertainty(object):
                         all_kinetic_sources['Rate Rules'][family_label] = set(training_rules)
                     else:
                         all_kinetic_sources['Rate Rules'][family_label].update(training_rules)
+                if node:
+                    if family_label not in all_kinetic_sources['Rate Rules']:
+                        all_kinetic_sources['Rate Rules'][family_label] = set([node])
+                    else:
+                        all_kinetic_sources['Rate Rules'][family_label].update([node])
 
         self.all_kinetic_sources = {}
         self.all_kinetic_sources['Library'] = all_kinetic_sources['Library']
@@ -646,6 +652,7 @@ class Uncertainty(object):
             sens_worksheet=sens_worksheet,
         )
 
+        # Plot should be separated from the sensitivity run
         plot_sensitivity(self.output_directory, reaction_system_index, reaction_system.sensitive_species,
                          number=number, fileformat=fileformat)
 
