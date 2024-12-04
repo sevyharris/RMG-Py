@@ -28,7 +28,7 @@
 ###############################################################################
 
 import os
-
+import re
 import numpy as np
 
 import rmgpy.util as util
@@ -60,17 +60,23 @@ class ThermoParameterUncertainty(object):
         Retrieve the uncertainty value in kcal/mol when the source of the thermo of a species is given.
         """
         dG = 0.0
+        varG = 0.0
         if 'Library' in source:
             dG += self.dG_library
+            varG += self.dG_library ** 2
         if 'QM' in source:
             dG += self.dG_QM
+            varG += self.dG_QM ** 2
         if 'GAV' in source:
             dG += self.dG_GAV  # Add a fixed uncertainty for the GAV method
+            varG += self.dG_GAV ** 2
             for group_type, group_entries in source['GAV'].items():
                 group_weights = [groupTuple[-1] for groupTuple in group_entries]
                 dG += np.sum([weight * self.dG_group for weight in group_weights])
+                varG += np.sum([weight ** 2 * self.dG_group ** 2 for weight in group_weights])
 
-        return dG
+        # return dG
+        return np.sqrt(varG)
 
     def get_partial_uncertainty_value(self, source, corr_source_type, corr_param=None, corr_group_type=None):
         """
@@ -145,17 +151,21 @@ class KineticParameterUncertainty(object):
         Retrieve the dlnk uncertainty when the source of the reaction kinetics are given
         """
         dlnk = 0.0
+        varlnk = 0.0
         if 'Library' in source:
             # Should be a single library reaction source
             dlnk += self.dlnk_library
+            varlnk += self.dlnk_library ** 2
         elif 'PDep' in source:
             # Should be a single pdep reaction source
             dlnk += self.dlnk_pdep
+            varlnk += self.dlnk_pdep ** 2
         elif 'Training' in source:
             # Should be a single training reaction
             # Although some training entries may be used in reverse,
             # We still consider the kinetics to be directly dependent 
             dlnk += self.dlnk_training
+            varlnk += self.dlnk_training ** 2
         elif 'Rate Rules' in source:
             family_label = source['Rate Rules'][0]
             source_dict = source['Rate Rules'][1]
@@ -164,13 +174,25 @@ class KineticParameterUncertainty(object):
             training_weights = [trainingTuple[-1] for trainingTuple in source_dict['training']]
 
             dlnk += self.dlnk_family ** 2
+            varlnk += self.dlnk_family ** 2
             N = len(rule_weights) + len(training_weights)
+            if 'node_std_dev' in source_dict:
+                # Handle autogen BM trees
+                if source_dict['node_std_dev'] < 0:
+                    raise ValueError('Invalid value for std dev of kinetics family rule node')
+                dlnk += source_dict['node_std_dev']
+                if source_dict['node_n_train'] < 0:
+                    raise ValueError('Invalid number of training reactions for kinetics family rule node')
+                N += source_dict['node_n_train']
+
             if not exact:
                 # nonexactness contribution increases as N increases
                 dlnk += np.log10(N + 1) * self.dlnk_nonexact
+                varlnk += (np.log10(N + 1) * self.dlnk_nonexact) ** 2
 
             # Add the contributions from rules
             dlnk += np.sum([weight * self.dlnk_rule for weight in rule_weights])
+            varlnk += np.sum([weight ** 2 * self.dlnk_rule ** 2 for weight in rule_weights])
             # Add the contributions from training
             # Even though these source from training reactions, we actually
             # use the uncertainty for rate rules, since these are now approximations
@@ -178,8 +200,10 @@ class KineticParameterUncertainty(object):
             # parameters because the rate rules may be reversing the training reactions,
             # which leads to more complicated dependence
             dlnk += np.sum([weight * self.dlnk_rule for weight in training_weights])
+            varlnk += np.sum([weight ** 2 * self.dlnk_rule ** 2 for weight in training_weights])
 
-        return dlnk
+        # return dlnk
+        return np.sqrt(varlnk)
 
     def get_partial_uncertainty_value(self, source, corr_source_type, corr_param=None, corr_family=None):
         """
@@ -319,7 +343,7 @@ class Uncertainty(object):
                 family.add_rules_from_training(thermo_database=self.database.thermo)
                 family.fill_rules_by_averaging_up(verbose=True)
 
-    def load_model(self, chemkin_path, dictionary_path, transport_path=None):
+    def load_model(self, chemkin_path, dictionary_path, transport_path=None, surface_path=None):
         """
         Load a RMG-generated model into the Uncertainty class
         `chemkin_path`: path to the chem_annotated.inp CHEMKIN mechanism
@@ -334,7 +358,8 @@ class Uncertainty(object):
 
         self.species_list, self.reaction_list = load_chemkin_file(chemkin_path,
                                                                   dictionary_path=dictionary_path,
-                                                                  transport_path=transport_path)
+                                                                  transport_path=transport_path,
+                                                                  surface_path=surface_path)
 
     def retrieve_saturated_species_from_list(self, species):
         """
@@ -413,8 +438,24 @@ class Uncertainty(object):
                 # Do nothing here because training source already saves the entry from the training reaction
                 pass
             elif 'Rate Rules' in source:
-                # Do nothing
-                pass
+                # Fetch standard deviation if autogenerated tree
+                if 'node' in source['Rate Rules'][1] and source['Rate Rules'][1]['node'] != '':
+                    node_name = source['Rate Rules'][1]['node']
+                    if 'Earaised' in node_name:  # TODO - this should be handled in family... and needs test cases
+                        node_name = node_name.split('Earaised')[0]
+
+                    long_desc = self.database.kinetics.families[reaction.family].rules.entries[node_name][0].long_desc
+                    std_dev_matches = re.search(r'Standard Deviation in ln\(k\): ([0-9]*.[0-9]*)', long_desc)
+                    std_dev = -1.0
+                    if std_dev_matches is not None:
+                        std_dev = float(std_dev_matches[1])
+
+                    n_train_matches = re.search('rule fitted to ([0-9]*) training reactions', long_desc)
+                    n_train = -1
+                    if n_train_matches is not None:
+                        n_train = int(n_train_matches[1])
+                    source['Rate Rules'][1]['node_std_dev'] = std_dev
+                    source['Rate Rules'][1]['node_n_train'] = n_train
             else:
                 raise Exception('Source of kinetics must be either Library, PDep, Training, or Rate Rules')
             self.reaction_sources_dict[reaction] = source
@@ -594,7 +635,8 @@ class Uncertainty(object):
                 self.kinetic_input_uncertainties.append(dlnk)
 
     def sensitivity_analysis(self, initial_mole_fractions, sensitive_species, T, P, termination_time,
-                             sensitivity_threshold=1e-3, number=10, fileformat='.png'):
+                             sensitivity_threshold=1e-3, number=10, fileformat='.png', initial_surface_coverages=None,
+                             surface_volume_ratio=None, surface_site_density=None):
         """
         Run sensitivity analysis using the RMG solver in a single ReactionSystem object
         
@@ -603,7 +645,7 @@ class Uncertainty(object):
         number is the number of top species thermo or reaction kinetics desired to be plotted
         """
 
-        from rmgpy.solver import SimpleReactor, TerminationTime
+        from rmgpy.solver import SimpleReactor, TerminationTime, SurfaceReactor
         from rmgpy.quantity import Quantity
         from rmgpy.rmg.listener import SimulationProfileWriter, SimulationProfilePlotter
         from rmgpy.rmg.settings import ModelSettings, SimulatorSettings
@@ -611,12 +653,30 @@ class Uncertainty(object):
         P = Quantity(P)
         termination = [TerminationTime(Quantity(termination_time))]
 
-        reaction_system = SimpleReactor(T=T,
-                                        P=P,
-                                        initial_mole_fractions=initial_mole_fractions,
-                                        termination=termination,
-                                        sensitive_species=sensitive_species,
-                                        sensitivity_threshold=sensitivity_threshold)
+
+        if any([x.contains_surface_site() for x in self.species_list]):
+            assert initial_surface_coverages is not None, 'Initial surface coverages must be provided for surface reactions'
+            assert surface_volume_ratio is not None, 'Surface volume ratio must be provided for surface reactions'
+            assert surface_site_density is not None, 'Surface site density must be provided for surface reactions'
+
+            reaction_system = SurfaceReactor(T,
+                                             P,
+                                             initial_mole_fractions,
+                                             initial_surface_coverages,
+                                             surface_volume_ratio,
+                                             surface_site_density,
+                                             n_sims=1,
+                                             termination=termination,
+                                             sensitive_species=sensitive_species,
+                                             sensitivity_threshold=sensitivity_threshold)
+        else:
+            reaction_system = SimpleReactor(T=T,
+                                            P=P,
+                                            initial_mole_fractions=initial_mole_fractions,
+                                            termination=termination,
+                                            sensitive_species=sensitive_species,
+                                            sensitivity_threshold=sensitivity_threshold)
+        print('initialized reactor')
 
         # Create the csv worksheets for logging sensitivity
         util.make_output_subdirectory(self.output_directory, 'solver')
@@ -639,13 +699,14 @@ class Uncertainty(object):
         model_settings.tol_interrupt_simulation = 1.0
         model_settings.tol_keep_in_edge = 0.0
 
+        print('starting simulation')
         reaction_system.simulate(
             core_species=self.species_list,
             core_reactions=self.reaction_list,
             edge_species=[],
             edge_reactions=[],
-            surface_species=[],
-            surface_reactions=[],
+            surface_species=[x for x in self.species_list if x.contains_surface_site()],
+            surface_reactions=[x for x in self.reaction_list if x.is_surface_reaction()],
             model_settings=model_settings,
             simulator_settings=simulator_settings,
             sensitivity=True,
@@ -746,6 +807,40 @@ class Uncertainty(object):
         return output
 
 
+    def export_thermo_covariance_matrix(self):
+        """
+        Export the thermo covariance matrix as a numpy array
+        """
+        cov_G = np.zeros((len(self.species_list), len(self.species_list)))
+
+        for i, species in enumerate(self.species_list):
+            for j, other_species in enumerate(self.species_list):
+                if i == j:
+                    cov_G[i, j] = self.thermo_input_uncertainties[i] ** 2
+                else:
+                    cov_G[i, j] = 0.0
+        
+        return cov_G
+    
+    def export_kinetic_covariance_matrix(self):
+        """
+        Export the kinetic covariance matrix as a numpy array
+        """
+        cov_k = np.zeros((len(self.reaction_list), len(self.reaction_list)))
+
+        for i, reaction in enumerate(self.reaction_list):
+            for j, other_reaction in enumerate(self.reaction_list):
+                if i == j:
+                    cov_k[i, j] = self.kinetic_input_uncertainties[i] ** 2
+                else:
+                    cov_k[i, j] = 0.0
+        
+        return cov_k
+
+
+
+
+
 def process_local_results(results, sensitive_species, number=10):
     """
     Return a dictionary of processed results along with a formatted string
@@ -784,3 +879,6 @@ def process_local_results(results, sensitive_species, number=10):
         output += '================================================================================\n\n'
 
     return processed_results, output
+
+
+
