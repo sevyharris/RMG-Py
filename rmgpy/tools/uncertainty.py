@@ -747,49 +747,51 @@ class Uncertainty(object):
             for i in range(gas.n_species):
                 reactor.add_sensitivity_species_enthalpy(i)
 
-            ts_ct = [net.time]
-            ys_ct = [reactor.thermo.X]
-            senss = [np.zeros(gas.n_reactions + gas.n_species)]
+            times = [net.time]
+            concentrations = [reactor.thermo.X]
+            all_sensitivities = [np.zeros((gas.n_reactions + gas.n_species, len(sensitive_species)))]
 
             while net.time < termination_time:
                 net.step()
-                ts_ct.append(net.time)
-                ys_ct.append(reactor.thermo.X)
-                time_array = np.array(ts_ct)
+                times.append(net.time)
+                concentrations.append(reactor.thermo.X)
+                time_array = np.array(times)
 
-                sens_mat = np.zeros(gas.n_reactions + gas.n_species)
-                for i in range(gas.n_reactions):
-                    sens_mat[i] = net.sensitivity(sensitive_species[0].to_chemkin(), i)
-                for i in range(gas.n_species):
-                    sens_mat[gas.n_reactions + i] = net.sensitivity(sensitive_species[0].to_chemkin(), gas.n_reactions + i)
-                senss.append(sens_mat)
-                
-                # write sensitivities -- TODO add multiple sensitive species
-                
-                with open(sens_worksheet[0], 'w') as outfile:
-                    species_name = sensitive_species[0].to_chemkin()
+                # record sensitivities
+                sens_mat = np.zeros((gas.n_reactions + gas.n_species, len(sensitive_species)))
+                for j in range(len(sensitive_species)):
+                    for i in range(gas.n_reactions):
+                        sens_mat[i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), i)
+                    for i in range(gas.n_species):
+                        sens_mat[gas.n_reactions + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), gas.n_reactions + i)                
+                all_sensitivities.append(sens_mat)
+
+
+            # Write sensitivities to CSV files, one file per sensitive species
+            for j in range(len(sensitive_species)):
+                with open(sens_worksheet[j], 'w') as outfile:
+                    species_name = sensitive_species[j].to_chemkin()
                     headers = ['Time (s)']
                     
                     worksheet = csv.writer(outfile)
                     reactions_above_threshold = []  # includes species too
-                    for j in range(gas.n_reactions + gas.n_species):
-                        for k in range(len(senss)):
-                            if abs(senss[k][j]) > sensitivity_threshold:
-                                reactions_above_threshold.append(j)
+                    for i in range(gas.n_reactions + gas.n_species):
+                        for t in range(len(all_sensitivities)):  # loop over time steps
+                            if abs(all_sensitivities[t][i, j]) > sensitivity_threshold:
+                                reactions_above_threshold.append(i)
                                 break
                     
                     # need conversion from Cantera to RMG and back
-                    headers.extend([f'dln[{species_name}]/dln[k{j + 1}]: {self.reaction_list[j].to_chemkin(kinetics=False)}' if j < gas.n_reactions
-                                    else f'dln[{species_name}]/dG[{self.species_list[j - gas.n_reactions].to_chemkin()}]' for j in reactions_above_threshold])
+                    headers.extend([f'dln[{species_name}]/dln[k{i + 1}]: {self.reaction_list[i].to_chemkin(kinetics=False)}' if i < gas.n_reactions
+                                    else f'dln[{species_name}]/dG[{self.species_list[i - gas.n_reactions].to_chemkin()}]' for i in reactions_above_threshold])
                     worksheet.writerow(headers)
 
-                    for k in range(len(time_array)):
-                        row = [time_array[k]]
-                        row.extend([senss[k][j] for j in reactions_above_threshold])
+                    for t in range(len(time_array)):
+                        row = [time_array[t]]
+                        row.extend([all_sensitivities[t][i, j] for i in reactions_above_threshold])
                         worksheet.writerow(row)
 
             # TODO - I should probably also include the regular concentration profile writer...
-
             # TODO - do something parallel with plot_sensitivity
             # TODO - handle surface sensitivities
 
