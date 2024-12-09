@@ -652,7 +652,7 @@ class Uncertainty(object):
         util.make_output_subdirectory(self.output_directory, 'solver')
         sens_worksheet = []
         reaction_system_index = 0
-        for spec in reaction_system.sensitive_species:
+        for spec in sensitive_species:
             csvfile_path = os.path.join(self.output_directory, 'solver',
                                         'sensitivity_{0}_SPC_{1}.csv'.format(reaction_system_index + 1, spec.index))
             sens_worksheet.append(csvfile_path)
@@ -688,6 +688,10 @@ class Uncertainty(object):
             reaction_system.simulate(
                 core_species=self.species_list,
                 core_reactions=self.reaction_list,
+                edge_species=[],
+                edge_reactions=[],
+                surface_species=[],
+                surface_reactions=[],
                 model_settings=model_settings,
                 simulator_settings=simulator_settings,
                 sensitivity=True,
@@ -699,9 +703,12 @@ class Uncertainty(object):
                              number=number, fileformat=fileformat)
 
         else:
-            import rmgpy.chemkin
             import csv
             import cantera as ct
+
+            # convert 
+            if type(list(initial_mole_fractions.keys())[0]) != str:
+                initial_mole_fractions = {x.to_chemkin(): initial_mole_fractions[x] for x in initial_mole_fractions}
 
             def same_reaction(rmg_rxn, ct_rxn):
                 # TODO make this more rigorous
@@ -731,16 +738,8 @@ class Uncertainty(object):
 
             reaction_system_index = 0
 
-
             reactor = ct.IdealGasConstPressureReactor(gas, energy='off')  # isothermal to match simple reactor
             net = ct.ReactorNet([reactor])
-
-
-            # set the tolerances for the solution and for the sensitivity coefficients
-            net.rtol = 1.0e-6
-            net.atol = 1.0e-15
-            net.rtol_sensitivity = 1.0e-6
-            net.atol_sensitivity = 1.0e-6
 
             # Add all reactions and species as sensitive parameters
             for i in range(gas.n_reactions):
@@ -760,29 +759,28 @@ class Uncertainty(object):
 
                 sens_mat = np.zeros(gas.n_reactions + gas.n_species)
                 for i in range(gas.n_reactions):
-                    sens_mat[i] = net.sensitivity(sensitive_species[0], i)
+                    sens_mat[i] = net.sensitivity(sensitive_species[0].to_chemkin(), i)
                 for i in range(gas.n_species):
-                    sens_mat[gas.n_reactions + i] = net.sensitivity('H2(1)', gas.n_reactions + i)
+                    sens_mat[gas.n_reactions + i] = net.sensitivity(sensitive_species[0].to_chemkin(), gas.n_reactions + i)
                 senss.append(sens_mat)
-                
                 
                 # write sensitivities -- TODO add multiple sensitive species
                 
                 with open(sens_worksheet[0], 'w') as outfile:
-                    species_name = rmgpy.chemkin.get_species_identifier(sensitive_species[0])
+                    species_name = sensitive_species[0].to_chemkin()
                     headers = ['Time (s)']
                     
                     worksheet = csv.writer(outfile)
-                    reactions_above_threshold = []
+                    reactions_above_threshold = []  # includes species too
                     for j in range(gas.n_reactions + gas.n_species):
-                        for k in range(len(ys_ct)):
-                            if abs(net.sensitivity('H2(1)', j)) > sensitivity_threshold:
+                        for k in range(len(senss)):
+                            if abs(senss[k][j]) > sensitivity_threshold:
                                 reactions_above_threshold.append(j)
                                 break
                     
                     # need conversion from Cantera to RMG and back
                     headers.extend([f'dln[{species_name}]/dln[k{j + 1}]: {self.reaction_list[j].to_chemkin(kinetics=False)}' if j < gas.n_reactions
-                                    else f'dln[{species_name}]/dG[{rmgpy.chemkin.get_species_identifier(gas.species()[j - gas.n_reactions])}]' for j in reactions_above_threshold])
+                                    else f'dln[{species_name}]/dG[{self.species_list[j - gas.n_reactions].to_chemkin()}]' for j in reactions_above_threshold])
                     worksheet.writerow(headers)
 
                     for k in range(len(time_array)):
@@ -790,6 +788,7 @@ class Uncertainty(object):
                         row.extend([senss[k][j] for j in reactions_above_threshold])
                         worksheet.writerow(row)
 
+            # TODO - I should probably also include the regular concentration profile writer...
 
             # TODO - do something parallel with plot_sensitivity
             # TODO - handle surface sensitivities
