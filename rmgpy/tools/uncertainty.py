@@ -636,7 +636,7 @@ class Uncertainty(object):
 
     def sensitivity_analysis(self, initial_mole_fractions, sensitive_species, T, P, termination_time,
                              sensitivity_threshold=1e-3, number=10, fileformat='.png', initial_surface_coverages=None,
-                             surface_volume_ratio=None, surface_site_density=None):
+                             surface_volume_ratio=None, surface_site_density=None, use_cantera=False):
         """
         Run sensitivity analysis using the RMG solver in a single ReactionSystem object
         
@@ -645,38 +645,8 @@ class Uncertainty(object):
         number is the number of top species thermo or reaction kinetics desired to be plotted
         """
 
-        from rmgpy.solver import SimpleReactor, TerminationTime, SurfaceReactor
-        from rmgpy.quantity import Quantity
-        from rmgpy.rmg.listener import SimulationProfileWriter, SimulationProfilePlotter
-        from rmgpy.rmg.settings import ModelSettings, SimulatorSettings
-        T = Quantity(T)
-        P = Quantity(P)
-        termination = [TerminationTime(Quantity(termination_time))]
-
-
         if any([x.contains_surface_site() for x in self.species_list]):
-            assert initial_surface_coverages is not None, 'Initial surface coverages must be provided for surface reactions'
-            assert surface_volume_ratio is not None, 'Surface volume ratio must be provided for surface reactions'
-            assert surface_site_density is not None, 'Surface site density must be provided for surface reactions'
-
-            reaction_system = SurfaceReactor(T,
-                                             P,
-                                             initial_mole_fractions,
-                                             initial_surface_coverages,
-                                             surface_volume_ratio,
-                                             surface_site_density,
-                                             n_sims=1,
-                                             termination=termination,
-                                             sensitive_species=sensitive_species,
-                                             sensitivity_threshold=sensitivity_threshold)
-        else:
-            reaction_system = SimpleReactor(T=T,
-                                            P=P,
-                                            initial_mole_fractions=initial_mole_fractions,
-                                            termination=termination,
-                                            sensitive_species=sensitive_species,
-                                            sensitivity_threshold=sensitivity_threshold)
-        print('initialized reactor')
+            assert use_cantera == True, 'Must use Cantera for sensitivity analysis for surface mechanisms'
 
         # Create the csv worksheets for logging sensitivity
         util.make_output_subdirectory(self.output_directory, 'solver')
@@ -687,35 +657,143 @@ class Uncertainty(object):
                                         'sensitivity_{0}_SPC_{1}.csv'.format(reaction_system_index + 1, spec.index))
             sens_worksheet.append(csvfile_path)
 
-        reaction_system.attach(SimulationProfileWriter(
-            self.output_directory, reaction_system_index, self.species_list))
-        reaction_system.attach(SimulationProfilePlotter(
-            self.output_directory, reaction_system_index, self.species_list))
+        if not use_cantera:
+            from rmgpy.solver import SimpleReactor, TerminationTime
+            from rmgpy.quantity import Quantity
+            from rmgpy.rmg.listener import SimulationProfileWriter, SimulationProfilePlotter
+            from rmgpy.rmg.settings import ModelSettings, SimulatorSettings
+            T = Quantity(T)
+            P = Quantity(P)
+            termination = [TerminationTime(Quantity(termination_time))]
 
-        simulator_settings = SimulatorSettings()  # defaults
+            reaction_system = SimpleReactor(T=T,
+                                            P=P,
+                                            initial_mole_fractions=initial_mole_fractions,
+                                            termination=termination,
+                                            sensitive_species=sensitive_species,
+                                            sensitivity_threshold=sensitivity_threshold)
 
-        model_settings = ModelSettings()  # defaults
-        model_settings.tol_move_to_core = 0.1
-        model_settings.tol_interrupt_simulation = 1.0
-        model_settings.tol_keep_in_edge = 0.0
+            reaction_system.attach(SimulationProfileWriter(
+                self.output_directory, reaction_system_index, self.species_list))
+            reaction_system.attach(SimulationProfilePlotter(
+                self.output_directory, reaction_system_index, self.species_list))
 
-        print('starting simulation')
-        reaction_system.simulate(
-            core_species=self.species_list,
-            core_reactions=self.reaction_list,
-            edge_species=[],
-            edge_reactions=[],
-            surface_species=[x for x in self.species_list if x.contains_surface_site()],
-            surface_reactions=[x for x in self.reaction_list if x.is_surface_reaction()],
-            model_settings=model_settings,
-            simulator_settings=simulator_settings,
-            sensitivity=True,
-            sens_worksheet=sens_worksheet,
-        )
+            simulator_settings = SimulatorSettings()  # defaults
 
-        # Plot should be separated from the sensitivity run
-        plot_sensitivity(self.output_directory, reaction_system_index, reaction_system.sensitive_species,
-                         number=number, fileformat=fileformat)
+            model_settings = ModelSettings()  # defaults
+            model_settings.tol_move_to_core = 0.1
+            model_settings.tol_interrupt_simulation = 1.0
+            model_settings.tol_keep_in_edge = 0.0
+
+            reaction_system.simulate(
+                core_species=self.species_list,
+                core_reactions=self.reaction_list,
+                model_settings=model_settings,
+                simulator_settings=simulator_settings,
+                sensitivity=True,
+                sens_worksheet=sens_worksheet,
+            )
+
+            # Plot should be separated from the sensitivity run
+            plot_sensitivity(self.output_directory, reaction_system_index, reaction_system.sensitive_species,
+                             number=number, fileformat=fileformat)
+
+        else:
+            import rmgpy.chemkin
+            import csv
+            import cantera as ct
+
+            def same_reaction(rmg_rxn, ct_rxn):
+                # TODO make this more rigorous
+                rmg_r = set([str(x.to_chemkin()) for x in rmg_rxn.reactants])
+                rmg_p = set([str(x.to_chemkin()) for x in rmg_rxn.products])
+
+                ct_r = set(ct_rxn.reactants.keys())
+                ct_p = set(ct_rxn.products.keys())
+                return rmg_r == ct_r and rmg_p == ct_p
+
+            # ------------ simple solver -----------------
+            gas = ct.Solution(
+                thermo='IdealGas',
+                kinetics='GasKinetics',
+                species=[x.to_cantera(use_chemkin_identifier=True) for x in self.species_list],
+                reactions=[x.to_cantera(use_chemkin_identifier=True) for x in self.reaction_list],
+            )
+
+            if len(self.reaction_list) != gas.n_reactions:
+                raise NotImplementedError  # we'll need to add the mapping from RMG to Ct reactions here
+            for i in range(len(self.species_list)):
+                assert str(self.species_list[i].to_chemkin()) == str(gas.species_names[i])
+            for i in range(len(self.reaction_list)):
+                assert same_reaction(self.reaction_list[i], gas.reactions()[i])
+
+            gas.TPX = T, P, initial_mole_fractions
+
+            reaction_system_index = 0
+
+
+            reactor = ct.IdealGasConstPressureReactor(gas, energy='off')  # isothermal to match simple reactor
+            net = ct.ReactorNet([reactor])
+
+
+            # set the tolerances for the solution and for the sensitivity coefficients
+            net.rtol = 1.0e-6
+            net.atol = 1.0e-15
+            net.rtol_sensitivity = 1.0e-6
+            net.atol_sensitivity = 1.0e-6
+
+            # Add all reactions and species as sensitive parameters
+            for i in range(gas.n_reactions):
+                reactor.add_sensitivity_reaction(i)
+            for i in range(gas.n_species):
+                reactor.add_sensitivity_species_enthalpy(i)
+
+            ts_ct = [net.time]
+            ys_ct = [reactor.thermo.X]
+            senss = [np.zeros(gas.n_reactions + gas.n_species)]
+
+            while net.time < termination_time:
+                net.step()
+                ts_ct.append(net.time)
+                ys_ct.append(reactor.thermo.X)
+                time_array = np.array(ts_ct)
+
+                sens_mat = np.zeros(gas.n_reactions + gas.n_species)
+                for i in range(gas.n_reactions):
+                    sens_mat[i] = net.sensitivity(sensitive_species[0], i)
+                for i in range(gas.n_species):
+                    sens_mat[gas.n_reactions + i] = net.sensitivity('H2(1)', gas.n_reactions + i)
+                senss.append(sens_mat)
+                
+                
+                # write sensitivities -- TODO add multiple sensitive species
+                
+                with open(sens_worksheet[0], 'w') as outfile:
+                    species_name = rmgpy.chemkin.get_species_identifier(sensitive_species[0])
+                    headers = ['Time (s)']
+                    
+                    worksheet = csv.writer(outfile)
+                    reactions_above_threshold = []
+                    for j in range(gas.n_reactions + gas.n_species):
+                        for k in range(len(ys_ct)):
+                            if abs(net.sensitivity('H2(1)', j)) > sensitivity_threshold:
+                                reactions_above_threshold.append(j)
+                                break
+                    
+                    # need conversion from Cantera to RMG and back
+                    headers.extend([f'dln[{species_name}]/dln[k{j + 1}]: {self.reaction_list[j].to_chemkin(kinetics=False)}' if j < gas.n_reactions
+                                    else f'dln[{species_name}]/dG[{rmgpy.chemkin.get_species_identifier(gas.species()[j - gas.n_reactions])}]' for j in reactions_above_threshold])
+                    worksheet.writerow(headers)
+
+                    for k in range(len(time_array)):
+                        row = [time_array[k]]
+                        row.extend([senss[k][j] for j in reactions_above_threshold])
+                        worksheet.writerow(row)
+
+
+            # TODO - do something parallel with plot_sensitivity
+            # TODO - handle surface sensitivities
+
 
     def local_analysis(self, sensitive_species, reaction_system_index=0, correlated=False, number=10,
                        fileformat='.png'):
