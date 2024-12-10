@@ -811,7 +811,7 @@ class Uncertainty(object):
                     for i in range(gas.n_reactions):
                         sens_mat[i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), i)
                     for i in range(gas.n_species):
-                        sens_mat[gas.n_reactions + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), gas.n_reactions + i)    
+                        sens_mat[gas.n_reactions + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), gas.n_reactions + i) * 4.184 * 1e6  # convert from J/kmol to kcal / mol 
                 all_sensitivities.append(sens_mat)
 
                 
@@ -952,7 +952,7 @@ class Uncertainty(object):
 
             # TODO - I should probably also include the regular concentration profile writer...
             # TODO - do something parallel with plot_sensitivity
-            return all_sensitivities
+
 
     def local_analysis(self, sensitive_species, reaction_system_index=0, correlated=False, number=10,
                        fileformat='.png'):
