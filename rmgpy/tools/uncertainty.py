@@ -707,7 +707,6 @@ class Uncertainty(object):
             import csv
             import copy
             import cantera as ct
-
             def same_reaction(rmg_rxn, ct_rxn):
                 # TODO make this more rigorous
                 rmg_r = set([str(x.to_chemkin()) for x in rmg_rxn.reactants])
@@ -724,7 +723,6 @@ class Uncertainty(object):
                     species=[x.to_cantera(use_chemkin_identifier=True) for x in self.species_list if not x.contains_surface_site()],
                     reactions=[x.to_cantera(use_chemkin_identifier=True) for x in self.reaction_list if not x.is_surface_reaction()],
                 )
-
                 if len(self.reaction_list) != gas.n_reactions:
                     raise NotImplementedError  # we'll need to add the mapping from RMG to Ct reactions here
                 for i in range(len(self.species_list)):
@@ -746,7 +744,8 @@ class Uncertainty(object):
                     assert same_reaction(self.reaction_list[i], gas.reactions()[i])
                 for i in range(surf.n_reactions):
                     assert same_reaction(self.reaction_list[i + gas.n_reactions], surf.reactions()[i])
-                
+
+
             # convert initial_mole_fractions to dictionary with string keys instead of species objects as keys
             if type(list(initial_mole_fractions.keys())[0]) != str:
                 initial_mole_fractions = {x.to_chemkin(): initial_mole_fractions[x] for x in initial_mole_fractions}
@@ -765,151 +764,114 @@ class Uncertainty(object):
             # Add all reactions and species as sensitive parameters
             for i in range(gas.n_reactions):
                 gas_reactor.add_sensitivity_reaction(i)
-            for i in range(gas.n_species):
-                gas_reactor.add_sensitivity_species_enthalpy(i)
-
-            times = [net.time]
-            concentrations = [gas_reactor.thermo.X]
-            all_sensitivities = [np.zeros((gas.n_reactions + gas.n_species, len(sensitive_species)))]
-
-
             if surface_mech:
-                concentrations_surf = [surf.concentrations]
-                all_sensitivities_surf = [np.zeros((surf.n_reactions + surf.n_species, len(sensitive_species)))]
-
                 for i in range(surf.n_reactions):
                     surf_reactor.add_sensitivity_reaction(i)
-                # TODO implement sensitivity in Cantera for surface species
-            
-            net.atol_sensitivity = 1e-9
-            net.rtol_sensitivity = 1e-6
+            # if not manual_sens:  # be careful here. This affects the order of net.sensitivity
+            for i in range(gas.n_species):
+                gas_reactor.add_sensitivity_species_enthalpy(i)
+            # surface sensitivity species not yet implemented in Cantera
 
+            times = [net.time]
+            # order of all_sensitivities is gas reactions, surface reactions, gas species, surface species
+            all_sensitivities = [np.zeros((len(self.species_list) + len(self.reaction_list), len(sensitive_species)))]
+            all_concentrations = [gas_reactor.thermo.X]
+            if surface_mech:
+                all_concentrations = [np.concatenate((gas_reactor.thermo.X, surf.concentrations))]
 
             while net.time < termination_time:
                 net.step()
                 times.append(net.time)
                 time_array = np.array(times)
-                concentrations.append(gas_reactor.thermo.X)
 
+                if not surface_mech:
+                    all_concentrations.append(gas_reactor.thermo.X)
+                else:
+                    all_concentrations.append(np.concatenate((gas_reactor.thermo.X, surf.concentrations)))
 
-                if surface_mech:
-                    S = gas.n_species + gas.n_reactions  # where to start surface numbering
-                    concentrations_surf.append(surf.concentrations)
-                    sens_mat_surf = np.zeros((surf.n_reactions + surf.n_species, len(sensitive_species)))
-                    for j in range(len(sensitive_species)):
-                        for i in range(surf.n_reactions):
-                            sens_mat_surf[i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), S + i)
-                        # Not Yet Implemented in Cantera
-                        # for i in range(surf.n_species):
-                        #     sens_mat_surf[surf.n_reactions + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), S + surf.n_reactions + i)                
-                    all_sensitivities_surf.append(sens_mat_surf)
-                
-
+                sens_mat = np.zeros((len(self.species_list) + len(self.reaction_list), len(sensitive_species)))
                 # record sensitivities
-                sens_mat = np.zeros((gas.n_reactions + gas.n_species, len(sensitive_species)))
                 for j in range(len(sensitive_species)):
-                    for i in range(gas.n_reactions):
+                    for i in range(gas.n_reactions):  # gas reactions
                         sens_mat[i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), i)
-                    for i in range(gas.n_species):
-                        sens_mat[gas.n_reactions + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), gas.n_reactions + i) * 4.184 * 1e6  # convert from J/kmol to kcal / mol 
-                all_sensitivities.append(sens_mat)
-
+                    # if not manual_sens:
+                    for i in range(gas.n_species):  # gas species
+                        sens_mat[len(self.reaction_list) + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), len(self.reaction_list) + i) * 4.184 * 1e6  # convert from J/kmol to kcal / mol 
+                    for i in range(len(self.reaction_list) - gas.n_reactions):  # surface reactions
+                        sens_mat[gas.n_reactions + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), gas.n_reactions + i)
+                    # Not Yet Implemented in Cantera
+                    # for i in range(n_surf_spcs):  # surface species
+                    #     sens_mat[len(self.reaction_list) + gas.n_species + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), len(self.reaction_list) + gas.n_species + i)                
                 
-            # do calc 
-            if manual_sens:  # checking calculation of manual sensitivity
-                for z in range(gas.n_species):
-                    # save the species thermo
-                    rmg_species_index = z
+                all_sensitivities.append(sens_mat)
+                
 
-                    saved_thermo = copy.deepcopy(self.species_list[rmg_species_index].thermo)
+            if manual_sens or surface_mech:
+
+                # # reset all values to zero that may have been computed by Cantera
+                # for t in range(len(all_sensitivities)):
+                #     all_sensitivities[t][len(self.reaction_list):, :] = 0.0
+
+
+                for z in range(len(self.species_list)):
 
                     # perturb the enthalpy by 0.1 kcal/mol
-                    perturb_species(self.species_list[rmg_species_index])
+                    saved_thermo = copy.deepcopy(self.species_list[z].thermo)
+                    perturb_species(self.species_list[z])
 
-                    gas = ct.Solution(
-                        thermo='IdealGas',
-                        kinetics='GasKinetics',
-                        species=[x.to_cantera(use_chemkin_identifier=True) for x in self.species_list if not x.contains_surface_site()],
-                        reactions=[x.to_cantera(use_chemkin_identifier=True) for x in self.reaction_list if not x.is_surface_reaction()],
-                    )
-
+                    if not surface_mech:
+                        gas = ct.Solution(
+                            thermo='IdealGas',
+                            kinetics='GasKinetics',
+                            species=[x.to_cantera(use_chemkin_identifier=True) for x in self.species_list if not x.contains_surface_site()],
+                            reactions=[x.to_cantera(use_chemkin_identifier=True) for x in self.reaction_list if not x.is_surface_reaction()],
+                        )
+                    else:
+                        gas, surf = make_ct_interface(self.species_list, self.reaction_list)
+                        
                     gas.TPX = T, P, initial_mole_fractions
                     gas_reactor = ct.IdealGasConstPressureReactor(gas, energy='off')  # isothermal to match simple reactor
+                    
+                    if surface_mech:
+                        surf.TP = T, P
+                        surf.coverages = initial_surface_coverages
+                        surf_reactor = ct.ReactorSurface(surf, gas_reactor)
+                    
                     net = ct.ReactorNet([gas_reactor])
 
                     assert net.time == 0
-                    # sens_times = [net.time]
                     sens_times = [net.time]
-                    # sens_concentrations_surf = [surf.concentrations]
-                    sens_concentrations = [gas_reactor.thermo.X]
+                    sens_all_concentrations = [gas_reactor.thermo.X]
+                    if surface_mech:
+                        sens_all_concentrations = [np.concatenate((gas_reactor.thermo.X, surf.concentrations))]
 
+                    # Run the Reaction Simulation
                     for t in times[1:]:  # first time entry is 0, so skip it
                         net.advance(t)
                         sens_times.append(net.time)
-                        # sens_time_array = np.array(sens_times)
-                        # sens_concentrations_surf.append(surf.concentrations)
-                        sens_concentrations.append(gas_reactor.thermo.X)
+                        if not surface_mech:
+                            sens_all_concentrations.append(gas_reactor.thermo.X)
+                        else:
+                            sens_all_concentrations.append(np.concatenate((gas_reactor.thermo.X, surf.concentrations)))
 
-
-                    for t in range(len(times)):
-                        assert times[t] == sens_times[t]
                     # reset the thermo
-                    self.species_list[rmg_species_index].thermo = saved_thermo
+                    self.species_list[z].thermo = saved_thermo
 
-                    assert len(sens_concentrations) == len(concentrations)
+                    assert np.alltrue(np.array(times) == np.array(sens_times))
+                    assert len(sens_all_concentrations) == len(all_concentrations)
+
                     # calculate the thermo sensitivity
                     for j in range(len(sensitive_species)):
                         sensitive_species_index = self.species_list.index(sensitive_species[j])
+                        assert  sensitive_species_index >= 0
                         for t in range(len(all_sensitivities)):
-                            if concentrations[t][sensitive_species_index] == 0 or concentrations[t][sensitive_species_index] < 1e-15:
+                            # if there's not much species, continue
+                            if all_concentrations[t][sensitive_species_index] < 1e-18:
                                 continue
-
-                            # sensitivity = (np.log(sens_concentrations[t][z]) - np.log(concentrations[t][z])) / 0.1 / np.sum(concentrations[t])
-                            sensitivity = (np.log(sens_concentrations[t][sensitive_species_index]) - np.log(concentrations[t][sensitive_species_index])) / 0.1
-
-                            all_sensitivities[t][gas.n_reactions + z, j] = sensitivity  
-
-            ## -- Do species sensitivity
-            if surface_mech:
-                assert gas.n_species == len([x for x in self.species_list if not x.contains_surface_site()])
-                assert surf.n_species == len([x for x in self.species_list if x.contains_surface_site()])
-                for z in range(surf.n_species):
-                    # save the species thermo
-                    rmg_species_index = gas.n_species + z
-
-                    saved_thermo = copy.deepcopy(self.species_list[rmg_species_index].thermo)
-
-                    # perturb the enthalpy by 0.1 kcal/mol
-                    perturb_species(self.species_list[rmg_species_index])
-
-                    # Run the entire simulation
-                    gas, surf = make_ct_interface(self.species_list, self.reaction_list)
-
-                    gas.TPX = T, P, initial_mole_fractions
-                    gas_reactor = ct.IdealGasConstPressureReactor(gas, energy='off')  # isothermal to match simple reactor
-
-                    surf.TP = T, P                
-                    surf.coverages = initial_surface_coverages
-                    surf_reactor = ct.ReactorSurface(surf, gas_reactor)
-
-                    net = ct.ReactorNet([gas_reactor])
-
-                    assert net.time == 0
-                    sens_times = [net.time]
-                    sens_concentrations_surf = [surf.concentrations]
-
-                    for t in range(len(time_array[1:])):  # first time entry is 0, so skip it
-                        net.advance(time_array[t])
-                        sens_times.append(net.time)
-                        # sens_time_array = np.array(sens_times)
-                        sens_concentrations_surf.append(surf.concentrations)
-
-                    # reset the thermo
-                    self.species_list[rmg_species_index].thermo = saved_thermo
-
-                    # calculate the sensitivities
-
-
+                            
+                            # s = delta C_j / delta G_z  # indexing should apply for both surface and gas species
+                            sensitivity = np.log(sens_all_concentrations[t][sensitive_species_index] / all_concentrations[t][sensitive_species_index]) / 0.1
+                            all_sensitivities[t][len(self.reaction_list) + z, j] = sensitivity  
 
             # Write sensitivities to CSV files, one file per sensitive species
             for j in range(len(sensitive_species)):
@@ -919,35 +881,22 @@ class Uncertainty(object):
                     
                     worksheet = csv.writer(outfile)
                     reactions_above_threshold = []  # includes species too
-                    for i in range(gas.n_reactions + gas.n_species):
+                    for i in range(len(self.reaction_list) + len(self.species_list)):
                         for t in range(len(all_sensitivities)):  # loop over time steps
                             if abs(all_sensitivities[t][i, j]) > sensitivity_threshold:
                                 reactions_above_threshold.append(i)
                                 break
-                    if surface_mech:
-                        surf_reactions_above_threshold = []  # includes species too, in theory, if it's ever implemented in Cantera
-                        for i in range(surf.n_reactions + surf.n_species):
-                            for t in range(len(all_sensitivities_surf)):  # loop over time steps
-                                if abs(all_sensitivities_surf[t][i, j]) > sensitivity_threshold:
-                                    surf_reactions_above_threshold.append(i)
-                                    break
                     
                     # need conversion from Cantera to RMG and back
-                    headers.extend([f'dln[{species_name}]/dln[k{i + 1}]: {self.reaction_list[i].to_chemkin(kinetics=False)}' if i < gas.n_reactions
-                                    else f'dln[{species_name}]/dG[{self.species_list[i - gas.n_reactions].to_chemkin()}]' for i in reactions_above_threshold])
-                    
-                    if surface_mech:
-                        headers.extend([f'dln[{species_name}]/dln[k{i + 1}]: {self.reaction_list[gas.n_reactions + i].to_chemkin(kinetics=False)}' if i < surf.n_reactions
-                                        else f'dln[{species_name}]/dG[{self.species_list[gas.n_species + i - surf.n_reactions].to_chemkin()}]' for i in surf_reactions_above_threshold])
-                    
+                    headers.extend([f'dln[{species_name}]/dln[k{i + 1}]: {self.reaction_list[i].to_chemkin(kinetics=False)}' if i < len(self.reaction_list)
+                                    else f'dln[{species_name}]/dG[{self.species_list[i - len(self.reaction_list)].to_chemkin()}]' for i in reactions_above_threshold])
+
                     worksheet.writerow(headers)
 
                     for t in range(len(time_array)):
                         row = [time_array[t]]
                         row.extend([all_sensitivities[t][i, j] for i in reactions_above_threshold])
-                        
-                        if surface_mech:
-                            row.extend([all_sensitivities_surf[t][i, j] for i in surf_reactions_above_threshold])
+
                         worksheet.writerow(row)
 
             # TODO - I should probably also include the regular concentration profile writer...
@@ -1073,8 +1022,6 @@ class Uncertainty(object):
                     cov_k[i, j] = 0.0
         
         return cov_k
-
-
 
 
 
