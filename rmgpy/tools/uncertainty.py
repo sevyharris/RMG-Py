@@ -773,6 +773,9 @@ class Uncertainty(object):
             # surface sensitivity species not yet implemented in Cantera
 
             times = [net.time]
+            volumes = [gas_reactor.volume]
+            pressures = [gas.P]
+            temperatures = [gas.T]
             # order of all_sensitivities is gas reactions, surface reactions, gas species, surface species
             all_sensitivities = [np.zeros((len(self.species_list) + len(self.reaction_list), len(sensitive_species)))]
             all_concentrations = [gas_reactor.thermo.X]
@@ -782,6 +785,9 @@ class Uncertainty(object):
             while net.time < termination_time:
                 net.step()
                 times.append(net.time)
+                volumes.append(gas_reactor.volume)
+                pressures.append(gas.P)
+                temperatures.append(gas.T)
                 time_array = np.array(times)
 
                 if not surface_mech:
@@ -847,7 +853,11 @@ class Uncertainty(object):
 
                     # Run the Reaction Simulation
                     for t in times[1:]:  # first time entry is 0, so skip it
-                        net.advance(t)
+                        try:
+                            net.advance(t)
+                        except ct._cantera.CanteraError:
+                            # sensitivity can break results, so just append nans? somehow signal the simulation failed
+                            break
                         sens_times.append(net.time)
                         if not surface_mech:
                             sens_all_concentrations.append(gas_reactor.thermo.X)
@@ -866,12 +876,33 @@ class Uncertainty(object):
                         assert  sensitive_species_index >= 0
                         for t in range(len(all_sensitivities)):
                             # if there's not much species, continue
-                            if all_concentrations[t][sensitive_species_index] < 1e-18:
+                            # if all_concentrations[t][sensitive_species_index] < 1e-18:
+                            if all_concentrations[t][sensitive_species_index] == 0:
                                 continue
                             
                             # s = delta C_j / delta G_z  # indexing should apply for both surface and gas species
+                            # if self.species_list[z].contains_surface_site():
+                            #     sensitivity = np.log(sens_all_concentrations[t][sensitive_species_index] / all_concentrations[t][sensitive_species_index])
+                            # else:    
                             sensitivity = np.log(sens_all_concentrations[t][sensitive_species_index] / all_concentrations[t][sensitive_species_index]) / 0.1
                             all_sensitivities[t][len(self.reaction_list) + z, j] = sensitivity  
+
+            # Write simulation results to CSV files
+            simulation_outfile = os.path.join(self.output_directory, 'solver', f'simulation_1_{len(self.species_list):d}.csv')
+            with open(simulation_outfile, 'w') as outfile:
+                header = ['Time (s)', 'Volume (m^3)', 'Temperature (K)', 'Pressure (Pa)']
+                for spc in self.species_list:
+                    header.append(spc.to_chemkin())
+                worksheet = csv.writer(outfile)
+
+                # add header row:
+                worksheet.writerow(header)
+
+                # add mole fractions:
+                for t in range(len(time_array)):
+                    row = [time_array[t], volumes[t], temperatures[t], pressures[t]]
+                    row.extend([all_concentrations[t][i] for i in range(len(self.species_list))])
+                    worksheet.writerow(row)
 
             # Write sensitivities to CSV files, one file per sensitive species
             for j in range(len(sensitive_species)):
@@ -899,7 +930,6 @@ class Uncertainty(object):
 
                         worksheet.writerow(row)
 
-            # TODO - I should probably also include the regular concentration profile writer...
             # TODO - do something parallel with plot_sensitivity
 
 
@@ -1169,6 +1199,9 @@ def perturb_species(species):
     # change the enthalpy offset
 
     DELTA_J_MOL = 418.4  # J/mol, but equals 0.1 kcal/mol
+
+    # if species.contains_surface_site():
+    #     DELTA_J_MOL = 4184  # perturb by more to avoid numerical noise?
     R = 8.3144598  # gas constant in J/mol
 
     increase = None
