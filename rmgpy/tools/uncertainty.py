@@ -753,6 +753,8 @@ class Uncertainty(object):
             gas_reactor = ct.IdealGasConstPressureReactor(gas, energy='off')  # isothermal to match simple reactor
             
             if surface_mech:
+                # gas_reactor = ct.IdealGasReactor(gas, energy='off')
+
                 surf.TP = T, P                
                 if type(list(initial_surface_coverages.keys())[0]) != str:
                     initial_surface_coverages = {x.to_chemkin(): initial_surface_coverages[x] for x in initial_surface_coverages}
@@ -776,11 +778,16 @@ class Uncertainty(object):
             volumes = [gas_reactor.volume]
             pressures = [gas.P]
             temperatures = [gas.T]
+
+            # also save enthalpies for sensitiviity
+            enthaplies = [gas.standard_enthalpies_RT * ct.gas_constant * gas.T]
+
             # order of all_sensitivities is gas reactions, surface reactions, gas species, surface species
             all_sensitivities = [np.zeros((len(self.species_list) + len(self.reaction_list), len(sensitive_species)))]
             all_concentrations = [gas_reactor.thermo.X]
             if surface_mech:
-                all_concentrations = [np.concatenate((gas_reactor.thermo.X, surf.concentrations))]
+                all_concentrations = [np.concatenate((gas_reactor.thermo.X, surf.concentrations / surf.site_density))]
+                enthaplies = [np.concatenate((gas.standard_enthalpies_RT * ct.gas_constant * gas.T, surf.standard_enthalpies_RT * ct.gas_constant * surf.T))]
 
             while net.time < termination_time:
                 net.step()
@@ -792,9 +799,10 @@ class Uncertainty(object):
 
                 if not surface_mech:
                     all_concentrations.append(gas_reactor.thermo.X)
+                    enthaplies.append(gas.standard_enthalpies_RT * ct.gas_constant * gas.T)
                 else:
-                    all_concentrations.append(np.concatenate((gas_reactor.thermo.X, surf.concentrations)))
-
+                    all_concentrations.append(np.concatenate((gas_reactor.thermo.X, surf.concentrations / surf.site_density)))
+                    enthaplies.append(np.concatenate((gas.standard_enthalpies_RT * ct.gas_constant * gas.T, surf.standard_enthalpies_RT * ct.gas_constant * surf.T)))
                 sens_mat = np.zeros((len(self.species_list) + len(self.reaction_list), len(sensitive_species)))
                 # record sensitivities
                 for j in range(len(sensitive_species)):
@@ -814,23 +822,29 @@ class Uncertainty(object):
 
             if manual_sens or surface_mech:
 
-                # # reset all values to zero that may have been computed by Cantera
-                # for t in range(len(all_sensitivities)):
-                #     all_sensitivities[t][len(self.reaction_list):, :] = 0.0
+                # Save the species enthalpies
+
+
+                # reset all values to zero that may have been computed by Cantera
+                for t in range(len(all_sensitivities)):
+                    all_sensitivities[t][len(self.reaction_list):, :] = 0.0
 
 
                 for z in range(len(self.species_list)):
 
                     # perturb the enthalpy by 0.1 kcal/mol
                     saved_thermo = copy.deepcopy(self.species_list[z].thermo)
-                    perturb_species(self.species_list[z])
+                    DELTA_J_MOL = 418.4
+                    if self.species_list[z].contains_surface_site():
+                        DELTA_J_MOL = 418.4
+                    perturb_species(self.species_list[z], DELTA_J_MOL)
 
                     if not surface_mech:
                         gas = ct.Solution(
                             thermo='IdealGas',
                             kinetics='GasKinetics',
-                            species=[x.to_cantera(use_chemkin_identifier=True) for x in self.species_list if not x.contains_surface_site()],
-                            reactions=[x.to_cantera(use_chemkin_identifier=True) for x in self.reaction_list if not x.is_surface_reaction()],
+                            species=[x.to_cantera(use_chemkin_identifier=True) for x in self.species_list],
+                            reactions=[x.to_cantera(use_chemkin_identifier=True) for x in self.reaction_list],
                         )
                     else:
                         gas, surf = make_ct_interface(self.species_list, self.reaction_list)
@@ -839,6 +853,8 @@ class Uncertainty(object):
                     gas_reactor = ct.IdealGasConstPressureReactor(gas, energy='off')  # isothermal to match simple reactor
                     
                     if surface_mech:
+                        # gas_reactor = ct.IdealGasReactor(gas, energy='off')
+
                         surf.TP = T, P
                         surf.coverages = initial_surface_coverages
                         surf_reactor = ct.ReactorSurface(surf, gas_reactor)
@@ -849,9 +865,12 @@ class Uncertainty(object):
                     sens_times = [net.time]
                     sens_all_concentrations = [gas_reactor.thermo.X]
                     if surface_mech:
-                        sens_all_concentrations = [np.concatenate((gas_reactor.thermo.X, surf.concentrations))]
+                        sens_all_concentrations = [np.concatenate((gas_reactor.thermo.X, surf.concentrations / surf.site_density))]
 
                     # Run the Reaction Simulation
+                    sens_volumes = [gas_reactor.volume]
+                    # sens_pressures = [gas.P]
+                    # sens_temperatures = [gas.T]
                     for t in times[1:]:  # first time entry is 0, so skip it
                         try:
                             net.advance(t)
@@ -859,10 +878,13 @@ class Uncertainty(object):
                             # sensitivity can break results, so just append nans? somehow signal the simulation failed
                             break
                         sens_times.append(net.time)
+                        sens_volumes.append(gas_reactor.volume)
+                        # sens_pressures.append(gas.P)
+                        # sens_temperatures.append(gas.T)
                         if not surface_mech:
                             sens_all_concentrations.append(gas_reactor.thermo.X)
                         else:
-                            sens_all_concentrations.append(np.concatenate((gas_reactor.thermo.X, surf.concentrations)))
+                            sens_all_concentrations.append(np.concatenate((gas_reactor.thermo.X, surf.concentrations / surf.site_density)))
 
                     # reset the thermo
                     self.species_list[z].thermo = saved_thermo
@@ -875,16 +897,37 @@ class Uncertainty(object):
                         sensitive_species_index = self.species_list.index(sensitive_species[j])
                         assert  sensitive_species_index >= 0
                         for t in range(len(all_sensitivities)):
+
                             # if there's not much species, continue
                             # if all_concentrations[t][sensitive_species_index] < 1e-18:
-                            if all_concentrations[t][sensitive_species_index] == 0:
-                                continue
+                            # if all_concentrations[t][sensitive_species_index] == 0:
+                            #     continue
+
+                            y_perturbed = sens_all_concentrations[t][sensitive_species_index]
+                            y = all_concentrations[t][sensitive_species_index]
                             
+                            x = enthaplies[t][z]  # J/kmol
+                            x_perturbed = x + DELTA_J_MOL * 1000.0  # convert to J/kmol for Cantera
+                            # x = 1.0
+                            # x_perturbed = DELTA_J_MOL / 4184
+                            if z == 0:
+                                print(y_perturbed - y)
+
+                            if y == 0:
+                                continue
+                            sensitivity = ((y_perturbed - y) / y) / (DELTA_J_MOL / 4184)
+
+                            # if sensitive_species[j].contains_surface_site():
+                            #     sensitivity = np.log(sens_all_concentrations[t][sensitive_species_index] / all_concentrations[t][sensitive_species_index]) / (DELTA_J_MOL / 4184)
+                            # else:
+                            #     sensitivity = np.log((sens_all_concentrations[t][sensitive_species_index] * sens_volumes[t]) /
+                            #                          (all_concentrations[t][sensitive_species_index] * volumes[t])) / (DELTA_J_MOL / 4184)  # convert to kcal
+
                             # s = delta C_j / delta G_z  # indexing should apply for both surface and gas species
                             # if self.species_list[z].contains_surface_site():
                             #     sensitivity = np.log(sens_all_concentrations[t][sensitive_species_index] / all_concentrations[t][sensitive_species_index])
                             # else:    
-                            sensitivity = np.log(sens_all_concentrations[t][sensitive_species_index] / all_concentrations[t][sensitive_species_index]) / 0.1
+                            # sensitivity = np.log(sens_all_concentrations[t][sensitive_species_index] / all_concentrations[t][sensitive_species_index]) / 0.1
                             all_sensitivities[t][len(self.reaction_list) + z, j] = sensitivity  
 
             # Write simulation results to CSV files
@@ -1023,34 +1066,73 @@ class Uncertainty(object):
         return output
 
 
-    def export_thermo_covariance_matrix(self):
+    def get_thermo_covariance_matrix(self):
         """
         Export the thermo covariance matrix as a numpy array
         """
+        assert not self.thermo_input_uncertainties is None, 'Must call assign_parameter_uncertainties first'
+        assert len(self.thermo_input_uncertainties) > 0, 'No thermodynamic parameters found'
+        if type(self.thermo_input_uncertainties[0]) == np.float64:
+            print("""Warning -- parameter uncertainties assigned without correlations.
+All off diagonals will be zero unless you call assign_parameter_uncertainties(correlated=True)""")
+            return np.float_power(np.diag(self.thermo_input_uncertainties), 2.0)
+        
         cov_G = np.zeros((len(self.species_list), len(self.species_list)))
 
-        for i, species in enumerate(self.species_list):
-            for j, other_species in enumerate(self.species_list):
-                if i == j:
-                    cov_G[i, j] = self.thermo_input_uncertainties[i] ** 2
-                else:
-                    cov_G[i, j] = 0.0
-        
+        for i in range(len(self.species_list)):
+            for j in range(len(self.species_list)):
+
+                # assuming only sources that match are correlated
+                for source_i in self.thermo_input_uncertainties[i].keys():
+                    if source_i in self.thermo_input_uncertainties[j].keys():
+                        cov_G[i, j] += self.thermo_input_uncertainties[i][source_i] * self.thermo_input_uncertainties[j][source_i]
         return cov_G
     
-    def export_kinetic_covariance_matrix(self):
+    def get_kinetic_covariance_matrix(self, k_param_engine=None):
         """
         Export the kinetic covariance matrix as a numpy array
         """
+
+        assert not self.kinetic_input_uncertainties is None, 'Must call assign_parameter_uncertainties first'
+        assert len(self.kinetic_input_uncertainties) > 0, 'No kinetic parameters found'
+        if type(self.kinetic_input_uncertainties[0]) == np.float64:
+            print("""Warning -- parameter uncertainties assigned without correlations.
+All off diagonals will be zero unless you call assign_parameter_uncertainties(correlated=True)""")
+            return np.float_power(np.diag(self.kinetic_input_uncertainties), 2.0)
+
+        if k_param_engine is None:
+            k_param_engine = KineticParameterUncertainty()
         cov_k = np.zeros((len(self.reaction_list), len(self.reaction_list)))
 
         for i, reaction in enumerate(self.reaction_list):
+            source_dict_i = self.reaction_sources_dict[self.reaction_list[i]]
             for j, other_reaction in enumerate(self.reaction_list):
-                if i == j:
-                    cov_k[i, j] = self.kinetic_input_uncertainties[i] ** 2
-                else:
-                    cov_k[i, j] = 0.0
-        
+                # assuming only sources that match are correlated
+                source_dict_j = self.reaction_sources_dict[self.reaction_list[j]]
+
+                for source_i in self.kinetic_input_uncertainties[i].keys():
+                    if source_i in self.kinetic_input_uncertainties[j].keys():
+                        cov_k[i, j] += self.kinetic_input_uncertainties[i][source_i] * self.kinetic_input_uncertainties[j][source_i]
+                    
+                # check if a training reaction exactly matches a rate rule data entry
+                if 'Training' in source_dict_i.keys() and 'Rate Rules' in source_dict_j.keys():
+                    rate_rules_training_reactions = [t[1] for t in source_dict_j['Rate Rules'][1]['training']]
+                    weights = [t[2] for t in source_dict_j['Rate Rules'][1]['training']] 
+                    training_reaction = source_dict_i['Training'][1]
+                    for k in range(len(rate_rules_training_reactions)):
+                        if rate_rules_training_reactions[k].item.is_isomorphic(training_reaction.item):
+                            cov_k[i, j] += weights[k] * k_param_engine.dlnk_training * k_param_engine.dlnk_rule
+                elif 'Training' in source_dict_j.keys() and 'Rate Rules' in source_dict_i.keys():
+                    rate_rules_training_reactions = [t[1] for t in source_dict_i['Rate Rules'][1]['training']]
+                    weights = [t[2] for t in source_dict_i['Rate Rules'][1]['training']] 
+                    training_reaction = source_dict_j['Training'][1]
+                    for k in range(len(rate_rules_training_reactions)):
+                        if rate_rules_training_reactions[k].item.is_isomorphic(training_reaction.item):
+                            cov_k[i, j] += weights[k] * k_param_engine.dlnk_training * k_param_engine.dlnk_rule
+
+                        # check if one of them is an exact training reaction - might be used in node rate rule
+
+
         return cov_k
 
 
@@ -1194,11 +1276,11 @@ surface1-reactions: []
 
     return gas, surf
 
-def perturb_species(species):
+def perturb_species(species, DELTA_J_MOL=418.4):
     # takes in an RMG species object
     # change the enthalpy offset
 
-    DELTA_J_MOL = 418.4  # J/mol, but equals 0.1 kcal/mol
+    # DELTA_J_MOL = 418.4  # J/mol, but equals 0.1 kcal/mol
 
     # if species.contains_surface_site():
     #     DELTA_J_MOL = 4184  # perturb by more to avoid numerical noise?
