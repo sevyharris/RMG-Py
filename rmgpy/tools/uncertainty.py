@@ -42,7 +42,7 @@ class ThermoParameterUncertainty(object):
     This class is an engine that generates the species uncertainty based on its thermo sources.
     """
 
-    def __init__(self, dG_library=1.5, dG_QM=3.0, dG_GAV=1.5, dG_group=0.10):
+    def __init__(self, dG_library=1.5, dG_QM=3.0, dG_GAV=1.5, dG_group=0.10, dG_ADS=6.918):
         """
         Initialize the different uncertainties dG_library, dG_QM, dG_GAV, and dG_other with set values
         in units of kcal/mol.
@@ -54,6 +54,7 @@ class ThermoParameterUncertainty(object):
         self.dG_QM = dG_QM
         self.dG_GAV = dG_GAV
         self.dG_group = dG_group
+        self.dG_ADS = dG_ADS
 
     def get_uncertainty_value(self, source):
         """
@@ -74,6 +75,13 @@ class ThermoParameterUncertainty(object):
                 group_weights = [groupTuple[-1] for groupTuple in group_entries]
                 dG += np.sum([weight * self.dG_group for weight in group_weights])
                 varG += np.sum([weight ** 2 * self.dG_group ** 2 for weight in group_weights])
+        if 'ADS' in source:
+            # dG += self.dG_GAV  # Add a fixed uncertainty for the GAV method
+            # varG += self.dG_GAV ** 2
+            for group_type, group_entries in source['ADS'].items():
+                group_weights = [groupTuple[-1] for groupTuple in group_entries]
+                dG += np.sum([weight * self.dG_ADS for weight in group_weights])
+                varG += np.sum([weight ** 2 * self.dG_ADS ** 2 for weight in group_weights])
 
         # return dG
         return np.sqrt(varG)
@@ -83,7 +91,7 @@ class ThermoParameterUncertainty(object):
         Obtain the partial uncertainty dG/dG_corr*dG_corr, where dG_corr is the correlated parameter
         
         `corr_param` is the parameter identifier itself, which is a integer for QM and library parameters, or a string for group values
-        `corr_source_type` is a string, being either 'Library', 'QM', 'GAV', or 'Estimation'
+        `corr_source_type` is a string, being either 'Library', 'QM', 'GAV', 'ADS', or 'Estimation'
         `corr_group_type` is a string used only when the source type is 'GAV' and indicates grouptype
         """
 
@@ -103,6 +111,14 @@ class ThermoParameterUncertainty(object):
             if 'GAV' in source:
                 if corr_group_type in source['GAV']:
                     group_list = source['GAV'][corr_group_type]
+                    for group, weight in group_list:
+                        if group == corr_param:
+                            return weight * self.dG_group
+
+        elif corr_source_type == 'ADS':
+            if 'ADS' in source:
+                if corr_group_type in source['ADS']:
+                    group_list = source['ADS'][corr_group_type]
                     for group, weight in group_list:
                         if group == corr_param:
                             return weight * self.dG_group
@@ -298,6 +314,8 @@ class Uncertainty(object):
         self.all_kinetic_sources = None
         self.thermo_input_uncertainties = None
         self.kinetic_input_uncertainties = None
+        self.thermo_covariance_matrix = None
+        self.kinetic_covariance_matrix = None
         self.output_directory = output_directory if output_directory else os.getcwd()
 
         # For extra species needed for correlated analysis but not in model
@@ -621,6 +639,12 @@ class Uncertainty(object):
                     if est_pdG:
                         label = 'Estimation {}'.format(species.to_chemkin())
                         dG[label] = est_pdG
+                if 'ADS' in source:
+                    for adsGroupType, groupList in source['ADS'].items():
+                        for group, weight in groupList:
+                            pdG = g_param_engine.get_partial_uncertainty_value(source, 'ADS', group, adsGroupType)
+                            label = 'AdsorptionGroup({}) {}'.format(adsGroupType, group.label)
+                            dG[label] = pdG
                 self.thermo_input_uncertainties.append(dG)
 
         for reaction in self.reaction_list:
@@ -1112,9 +1136,10 @@ class Uncertainty(object):
         if type(self.thermo_input_uncertainties[0]) == np.float64:
             print("""Warning -- parameter uncertainties assigned without correlations.
 All off diagonals will be zero unless you call assign_parameter_uncertainties(correlated=True)""")
-            return np.float_power(np.diag(self.thermo_input_uncertainties), 2.0)
+            self.thermo_covariance_matrix = np.float_power(np.diag(self.thermo_input_uncertainties), 2.0)
+            return self.thermo_covariance_matrix
         
-        cov_G = np.zeros((len(self.species_list), len(self.species_list)))
+        self.thermo_covariance_matrix = np.zeros((len(self.species_list), len(self.species_list)))
 
         for i in range(len(self.species_list)):
             for j in range(len(self.species_list)):
@@ -1122,8 +1147,8 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
                 # assuming only sources that match are correlated
                 for source_i in self.thermo_input_uncertainties[i].keys():
                     if source_i in self.thermo_input_uncertainties[j].keys():
-                        cov_G[i, j] += self.thermo_input_uncertainties[i][source_i] * self.thermo_input_uncertainties[j][source_i]
-        return cov_G
+                        self.thermo_covariance_matrix[i, j] += self.thermo_input_uncertainties[i][source_i] * self.thermo_input_uncertainties[j][source_i]
+        return self.thermo_covariance_matrix
     
     def get_kinetic_covariance_matrix(self, k_param_engine=None):
         """
@@ -1135,11 +1160,14 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
         if type(self.kinetic_input_uncertainties[0]) == np.float64:
             print("""Warning -- parameter uncertainties assigned without correlations.
 All off diagonals will be zero unless you call assign_parameter_uncertainties(correlated=True)""")
-            return np.float_power(np.diag(self.kinetic_input_uncertainties), 2.0)
+            self.kinetic_covariance_matrix = np.float_power(np.diag(self.kinetic_input_uncertainties), 2.0)
+            return self.kinetic_covariance_matrix
 
         if k_param_engine is None:
             k_param_engine = KineticParameterUncertainty()
-        cov_k = np.zeros((len(self.reaction_list), len(self.reaction_list)))
+
+        
+        self.kinetic_covariance_matrix = np.zeros((len(self.reaction_list), len(self.reaction_list)))
 
         # takes a while to load the family reaction maps  # Julia required
         auto_gen_family_rxn_maps = {}
@@ -1163,7 +1191,7 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
 
                 for source_i in self.kinetic_input_uncertainties[i].keys():
                     if source_i in self.kinetic_input_uncertainties[j].keys():
-                        cov_k[i, j] += self.kinetic_input_uncertainties[i][source_i] * self.kinetic_input_uncertainties[j][source_i]
+                        self.kinetic_covariance_matrix[i, j] += self.kinetic_input_uncertainties[i][source_i] * self.kinetic_input_uncertainties[j][source_i]
                 else:
                     # no match in rules, but there may be overlap if they're SIDT trees using the same family
                     if 'Rate Rules' in source_dict_i.keys() and 'Rate Rules' in source_dict_j.keys():
@@ -1180,7 +1208,7 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
                                 if r_i in rxns_j:
                                     overlap_count += 1
                             
-                            cov_k[i, j] += (overlap_count / len(rxns_i)) * (overlap_count / len(rxns_j)) * (k_param_engine.dlnk_rule ** 2.0)
+                            self.kinetic_covariance_matrix[i, j] += (overlap_count / len(rxns_i)) * (overlap_count / len(rxns_j)) * (k_param_engine.dlnk_rule ** 2.0)
 
 
                 # check if a training reaction exactly matches a rate rule data entry
@@ -1190,19 +1218,19 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
                     training_reaction = source_dict_i['Training'][1]
                     for k in range(len(rate_rules_training_reactions)):
                         if rate_rules_training_reactions[k].item.is_isomorphic(training_reaction.item):
-                            cov_k[i, j] += weights[k] * k_param_engine.dlnk_training * k_param_engine.dlnk_rule
+                            self.kinetic_covariance_matrix[i, j] += weights[k] * k_param_engine.dlnk_training * k_param_engine.dlnk_rule
                 elif 'Training' in source_dict_j.keys() and 'Rate Rules' in source_dict_i.keys():
                     rate_rules_training_reactions = [t[1] for t in source_dict_i['Rate Rules'][1]['training']]
                     weights = [t[2] for t in source_dict_i['Rate Rules'][1]['training']] 
                     training_reaction = source_dict_j['Training'][1]
                     for k in range(len(rate_rules_training_reactions)):
                         if rate_rules_training_reactions[k].item.is_isomorphic(training_reaction.item):
-                            cov_k[i, j] += weights[k] * k_param_engine.dlnk_training * k_param_engine.dlnk_rule
+                            self.kinetic_covariance_matrix[i, j] += weights[k] * k_param_engine.dlnk_training * k_param_engine.dlnk_rule
 
                         # check if one of them is an exact training reaction - might be used in node rate rule
 
 
-        return cov_k
+        return self.kinetic_covariance_matrix
 
 
 
