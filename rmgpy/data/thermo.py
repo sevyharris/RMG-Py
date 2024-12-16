@@ -47,6 +47,7 @@ from rmgpy.data.base import Database, Entry, make_logic_node, DatabaseError
 from rmgpy.ml.estimator import MLEstimator
 from rmgpy.molecule import Molecule, Bond, Group
 from rmgpy.species import Species
+import rmgpy.species
 from rmgpy.thermo import NASAPolynomial, NASA, ThermoData, Wilhoit
 from rmgpy.data.surface import MetalDatabase
 from rmgpy import settings
@@ -2230,7 +2231,7 @@ class ThermoDatabase(object):
                     if atom.atomtype.label == 'Cb':
                         neighbors = neighbors.replace('Cb', '')
                     group_str = f'{atom.atomtype.label}-{neighbors}'
-                    if group_str not in ['O2d-CO', 'S2d-CS']:
+                    if group_str not in ['O2d-CO', 'S2d-CS', 'O2d-Cdd']:
                         if thermo_data.comment:
                             thermo_data.comment += f' + missing({group_str})'
                         else:
@@ -2724,7 +2725,8 @@ class ThermoDatabase(object):
         
         source = {'Library': String_Name_of_Library_Used,
                   'QM': String_of_Method_Used,
-                  'GAV': Dictionary_of_Groups_Used 
+                  'GAV': Dictionary_of_Groups_Used
+                  'ADS': Dictionary_of_Adsorption_Group_Used
                   }
                   
         The Dictionary_of_Groups_Used looks like 
@@ -2743,9 +2745,41 @@ class ThermoDatabase(object):
             # Store the level of the calculation, which is the 2nd token in the comments
             source['QM'] = tokens[1]
 
+        elif comment.startswith('Gas phase thermo'):
+            comment = comment.replace(r'\n', ' ')
+            comment = comment.replace('\n', ' ')
+            assert 'Adsorption correction:' in comment, f'adsorption correction in unrecognized format {comment}'
+
+            # Handle the gas-phase portion first
+            gas_comment = comment.split('Adsorption correction: + ')[0].strip()
+            gas_comment = gas_comment.replace('.', '', -1)  # delete the . at the end if it exists
+            gas_comment = gas_comment[gas_comment.find('from ', len('Gas phase thermo for ')) + len('from '):]
+            dummy_gas_phase_species = rmgpy.species.Species()
+            dummy_gas_phase_species.thermo = NASA()
+            dummy_gas_phase_species.thermo.comment = gas_comment
+            source = self.extract_source_from_comments(dummy_gas_phase_species)
+
+            # This is an adsorption correction
+            # comment is split into two parts: the gas phase, and the surface adsorption corection
+            ads_correction_comment = comment.split('Adsorption correction: +')[-1].strip()
+            dummy_adsorption_correction_species = rmgpy.species.Species()
+            dummy_adsorption_correction_species.thermo = NASA()
+            dummy_adsorption_correction_species.thermo.comment = ads_correction_comment
+            source['ADS'] = self.extract_source_from_comments(dummy_adsorption_correction_species)['GAV']
+
+            return source
+
+            # Library example
+            # Gas phase thermo for C(T) from Thermo library: primaryThermoLibrary.
+            # Adsorption correction: + Thermo group additivity estimation: adsorptionPt111(Cq*)
+
+            # GAV example
+            # Gas phase thermo for [CH]CC from Thermo group additivity estimation: group(Cs-CsCsHH) + group(Cs-CsHHH) + group(Cs-CsHHH) + radical(CCJ2_triplet).
+            # Adsorption correction: + Thermo group additivity estimation: adsorptionPt111(C=*RCR3)""
+
         # Check for group additivity contributions to the thermo in this species            
 
-        # The contribution of the groups can be either additive or substracting
+        # The contribution of the groups can be either additive or subtracting
         # after changes to the polycyclic algorithm
 
         comment = comment.replace(' + ', ' +')

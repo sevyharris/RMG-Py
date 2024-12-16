@@ -393,6 +393,7 @@ class Uncertainty(object):
         Must be done after loading model and database to work.
         """
         self.species_sources_dict = {}
+        self.extra_species = []
         for species in self.species_list:
             if species not in self.extra_species:
                 source = self.database.thermo.extract_source_from_comments(species)
@@ -408,9 +409,34 @@ class Uncertainty(object):
                         source['QM'] = self.species_list.index(species)
 
                 elif len(source) == 2:
-                    # The thermo has two sources, which indicates it's an HBI correction on top of a library or QM value.
-                    # We must retrieve the original saturated molecule's thermo instead of using the radical species as the source of thermo
-                    saturated_species, ignore_spc = self.retrieve_saturated_species_from_list(species)
+                    # The thermo has two sources, which indicates it's an HBI correction on top of a library or QM value...
+                    # OR it is an adsorption correction with gas-phase thermo from Library/QM
+                    if 'ADS' in source:
+                        if 'Library' in source:
+                            # Use just the species index in self.species_list, for better shorter printouts when debugging
+                            source['Library'] = self.species_list.index(species)
+                        if 'QM' in source:
+                            source['QM'] = self.species_list.index(species)
+                    else:
+                        # We must retrieve the original saturated molecule's thermo instead of using the radical species as the source of thermo
+                        saturated_species, ignore_spc = self.retrieve_saturated_species_from_list(species)
+
+                        if ignore_spc:  # this is saturated species that isn't in the actual model  
+                            self.extra_species.append(saturated_species)
+
+                        if 'Library' in source:
+                            source['Library'] = self.species_list.index(saturated_species)
+                        if 'QM' in source:
+                            source['QM'] = self.species_list.index(saturated_species)
+                elif len(source) == 3:
+                    # combination of adsorption correction, GAV (radical), and Library/ML
+                    
+                    assert species.contains_surface_site(), 'only surface species should have 3 sources: adsorption correction, GAV, library/ML'
+                    
+                    # retrieve the desorbed version of the surface species-- the thing the adsorption correction was applied to during thermo estimation
+                    dummy_gas_species = Species()
+                    dummy_gas_species.molecule = species.molecule[0].get_desorbed_molecules()
+                    saturated_species, ignore_spc = self.retrieve_saturated_species_from_list(dummy_gas_species)
 
                     if ignore_spc:  # this is saturated species that isn't in the actual model
                         self.extra_species.append(saturated_species)
@@ -419,8 +445,9 @@ class Uncertainty(object):
                         source['Library'] = self.species_list.index(saturated_species)
                     if 'QM' in source:
                         source['QM'] = self.species_list.index(saturated_species)
+
                 else:
-                    raise Exception('Source of thermo should not use more than two sources out of QM, Library, or GAV.')
+                    raise Exception('Source of thermo should not use more than three sources out of ADS, QM, Library, or GAV.')
 
                 self.species_sources_dict[species] = source
 
@@ -469,7 +496,7 @@ class Uncertainty(object):
         be performed after extract_sources_from_model function
         """
         # Account for all the thermo sources
-        all_thermo_sources = {'GAV': {}, 'Library': set(), 'QM': set()}
+        all_thermo_sources = {'GAV': {}, 'Library': set(), 'QM': set(), 'ADS': {}}
         for source in self.species_sources_dict.values():
             if 'GAV' in source:
                 for groupType in source['GAV'].keys():
@@ -482,6 +509,13 @@ class Uncertainty(object):
                 all_thermo_sources['Library'].add(source['Library'])
             if 'QM' in source:
                 all_thermo_sources['QM'].add(source['QM'])
+            if 'ADS' in source:
+                for ads_group in source['ADS'].keys():
+                    ads_group_entries = [groupTuple[0] for groupTuple in source['ADS'][ads_group]]
+                    if ads_group not in all_thermo_sources['ADS']:
+                        all_thermo_sources['ADS'][ads_group] = set(ads_group_entries)
+                    else:
+                        all_thermo_sources['ADS'][ads_group].update(ads_group_entries)
 
                 # Convert to lists
         self.all_thermo_sources = {}
@@ -490,6 +524,9 @@ class Uncertainty(object):
         self.all_thermo_sources['GAV'] = {}
         for groupType in all_thermo_sources['GAV'].keys():
             self.all_thermo_sources['GAV'][groupType] = list(all_thermo_sources['GAV'][groupType])
+        self.all_thermo_sources['ADS'] = {}
+        for ads_group in all_thermo_sources['ADS'].keys():
+            self.all_thermo_sources['ADS'][ads_group] = list(all_thermo_sources['ADS'][ads_group])
 
         # Account for all the kinetics sources
         all_kinetic_sources = {'Rate Rules': {}, 'Training': {}, 'Library': [], 'PDep': []}
@@ -1104,6 +1141,20 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
             k_param_engine = KineticParameterUncertainty()
         cov_k = np.zeros((len(self.reaction_list), len(self.reaction_list)))
 
+        # takes a while to load the family reaction maps  # Julia required
+        auto_gen_family_rxn_maps = {}
+        if self.all_kinetic_sources is None:
+            self.compile_all_sources()
+        for family in self.all_kinetic_sources['Rate Rules'].keys():
+            if self.database.kinetics.families[family].auto_generated:
+                auto_gen_family_rxn_maps[family] = self.database.kinetics.families[family].get_reaction_matches(
+                    thermo_database=self.database.thermo,
+                    remove_degeneracy=True,
+                    get_reverse=True,
+                    exact_matches_only=False,
+                    fix_labels=True
+                )
+
         for i, reaction in enumerate(self.reaction_list):
             source_dict_i = self.reaction_sources_dict[self.reaction_list[i]]
             for j, other_reaction in enumerate(self.reaction_list):
@@ -1113,7 +1164,25 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
                 for source_i in self.kinetic_input_uncertainties[i].keys():
                     if source_i in self.kinetic_input_uncertainties[j].keys():
                         cov_k[i, j] += self.kinetic_input_uncertainties[i][source_i] * self.kinetic_input_uncertainties[j][source_i]
-                    
+                else:
+                    # no match in rules, but there may be overlap if they're SIDT trees using the same family
+                    if 'Rate Rules' in source_dict_i.keys() and 'Rate Rules' in source_dict_j.keys():
+                        if source_dict_i['Rate Rules'][1]['node'] and source_dict_j['Rate Rules'][1]['node'] and \
+                            source_dict_i['Rate Rules'][0] == source_dict_j['Rate Rules'][0]:
+                            # get #training reactions in overlap
+                            family = source_dict_i['Rate Rules'][0]
+                            rxns_i = auto_gen_family_rxn_maps[family][source_dict_i['Rate Rules'][1]['node']]
+                            rxns_j = auto_gen_family_rxn_maps[family][source_dict_j['Rate Rules'][1]['node']]
+
+                            # count overlapping reactions:
+                            overlap_count = 0
+                            for r_i in rxns_i:
+                                if r_i in rxns_j:
+                                    overlap_count += 1
+                            
+                            cov_k[i, j] += (overlap_count / len(rxns_i)) * (overlap_count / len(rxns_j)) * (k_param_engine.dlnk_rule ** 2.0)
+
+
                 # check if a training reaction exactly matches a rate rule data entry
                 if 'Training' in source_dict_i.keys() and 'Rate Rules' in source_dict_j.keys():
                     rate_rules_training_reactions = [t[1] for t in source_dict_j['Rate Rules'][1]['training']]
