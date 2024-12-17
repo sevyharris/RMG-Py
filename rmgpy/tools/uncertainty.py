@@ -42,7 +42,7 @@ class ThermoParameterUncertainty(object):
     This class is an engine that generates the species uncertainty based on its thermo sources.
     """
 
-    def __init__(self, dG_library=1.5, dG_QM=3.0, dG_GAV=1.5, dG_group=0.10, dG_ADS=6.918):
+    def __init__(self, dG_library=1.5, dG_QM=3.0, dG_GAV=1.5, dG_group=0.10, dG_ADS=6.918, dG_ADS_group=6.918, dG_surf_lib=6.918):
         """
         Initialize the different uncertainties dG_library, dG_QM, dG_GAV, and dG_other with set values
         in units of kcal/mol.
@@ -55,6 +55,8 @@ class ThermoParameterUncertainty(object):
         self.dG_GAV = dG_GAV
         self.dG_group = dG_group
         self.dG_ADS = dG_ADS
+        self.dG_ADS_group = dG_ADS_group
+        self.dG_surf_lib = dG_surf_lib
 
     def get_uncertainty_value(self, source):
         """
@@ -65,6 +67,9 @@ class ThermoParameterUncertainty(object):
         if 'Library' in source:
             dG += self.dG_library
             varG += self.dG_library ** 2
+        if 'Library_surface' in source:
+            dG += self.dG_surf_lib
+            varG += self.dG_surf_lib ** 2
         if 'QM' in source:
             dG += self.dG_QM
             varG += self.dG_QM ** 2
@@ -80,8 +85,11 @@ class ThermoParameterUncertainty(object):
             # varG += self.dG_GAV ** 2
             for group_type, group_entries in source['ADS'].items():
                 group_weights = [groupTuple[-1] for groupTuple in group_entries]
-                dG += np.sum([weight * self.dG_ADS for weight in group_weights])
-                varG += np.sum([weight ** 2 * self.dG_ADS ** 2 for weight in group_weights])
+                dG += np.sum([weight * self.dG_ADS_group for weight in group_weights])
+                varG += np.sum([weight ** 2 * self.dG_ADS_group ** 2 for weight in group_weights])
+
+            dG += self.dG_ADS
+            varG += self.dG_ADS ** 2
 
         # return dG
         return np.sqrt(varG)
@@ -100,6 +108,12 @@ class ThermoParameterUncertainty(object):
                 if source['Library'] == corr_param:
                     # Correlated parameter is a source of the overall parameter
                     return self.dG_library
+                
+        elif corr_source_type == 'Library_surface':
+            if 'Library_surface' in source:
+                if source['Library_surface'] == corr_param:
+                    # Correlated parameter is a source of the overall parameter
+                    return self.dG_surf_lib 
 
         elif corr_source_type == 'QM':
             if 'QM' in source:
@@ -121,13 +135,17 @@ class ThermoParameterUncertainty(object):
                     group_list = source['ADS'][corr_group_type]
                     for group, weight in group_list:
                         if group == corr_param:
-                            return weight * self.dG_group
+                            return weight * self.dG_ADS_group
 
         elif corr_source_type == 'Estimation':
             if 'GAV' in source:
                 return self.dG_GAV
+
+        elif corr_source_type == 'ADS_estimation':
+            if 'ADS' in source:
+                return self.dG_ADS
         else:
-            raise Exception('Thermo correlated source must be GAV, QM, Library, or Estimation')
+            raise Exception('Thermo correlated source must be GAV, QM, Library, Library_surface, ADS, ADS_estimation, or Estimation')
 
         # If we get here, it means the correlated parameter was not found
         return None
@@ -423,6 +441,10 @@ class Uncertainty(object):
                     if 'Library' in source:
                         # Use just the species index in self.species_list, for better shorter printouts when debugging
                         source['Library'] = self.species_list.index(species)
+
+                        if species.contains_surface_site():
+                            source['Library_surface'] = source.pop('Library')
+
                     if 'QM' in source:
                         source['QM'] = self.species_list.index(species)
 
@@ -444,6 +466,9 @@ class Uncertainty(object):
 
                         if 'Library' in source:
                             source['Library'] = self.species_list.index(saturated_species)
+
+                            if saturated_species.contains_surface_site():
+                                source['Library_surface'] = source.pop('Library')  # surface species library + radical correction
                         if 'QM' in source:
                             source['QM'] = self.species_list.index(saturated_species)
                 elif len(source) == 3:
