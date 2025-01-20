@@ -32,6 +32,7 @@ import re
 import numpy as np
 
 import rmgpy.util as util
+import rmgpy.kinetics
 from rmgpy.species import Species
 from rmgpy.tools.data import GenericData
 from rmgpy.tools.plot import parse_csv_data, plot_sensitivity, ReactionSensitivityPlot, ThermoSensitivityPlot
@@ -1219,6 +1220,11 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
         if k_param_engine is None:
             k_param_engine = KineticParameterUncertainty()
 
+        def species_in_list(new_species, species_list):
+            for sp in species_list:
+                if new_species.is_isomorphic(sp):
+                    return True
+            return False
         
         self.kinetic_covariance_matrix = np.zeros((len(self.reaction_list), len(self.reaction_list)))
 
@@ -1281,6 +1287,32 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
                             self.kinetic_covariance_matrix[i, j] += weights[k] * k_param_engine.dlnk_training * k_param_engine.dlnk_rule
 
                         # check if one of them is an exact training reaction - might be used in node rate rule
+
+
+                # Add in thermo correlations if both BEP
+                if type(reaction.kinetics) in [rmgpy.kinetics.surface.SurfaceArrheniusBEP, rmgpy.kinetics.surface.StickingCoefficientBEP] and \
+                        type(other_reaction.kinetics) in [rmgpy.kinetics.surface.SurfaceArrheniusBEP, rmgpy.kinetics.surface.StickingCoefficientBEP]:
+                    
+                    alpha_i = reaction.kinetics.alpha.value_si
+                    alpha_j = other_reaction.kinetics.alpha.value_si
+
+                    R = 8.314472
+                    T = 1000.0
+                    r1_sp_indices = [self.species_list.index(sp) for sp in reaction.reactants + reaction.products]
+                    r1_coefficients = [-1 for x in reaction.reactants]
+                    r1_coefficients.extend([1 for x in reaction.products])
+
+                    r2_sp_indices = [self.species_list.index(sp) for sp in other_reaction.reactants + other_reaction.products]
+                    r2_coefficients = [-1 for x in other_reaction.reactants]
+                    r2_coefficients.extend([1 for x in other_reaction.products])
+                    for r1 in range(len(r1_sp_indices)):
+                        for r2 in range(len(r2_sp_indices)):
+
+                            covH = self.thermo_covariance_matrix[r1_sp_indices[r1], r2_sp_indices[r2]] * 4184 * 4184  # convert from kcal/mol to J/mol
+                            nu_i = r1_coefficients[r1]
+                            nu_j = r2_coefficients[r2]
+
+                            self.kinetic_covariance_matrix[i, j] += nu_i * nu_j * alpha_i * alpha_j * covH / np.float_power(R * T, 2.0)
 
 
         return self.kinetic_covariance_matrix
