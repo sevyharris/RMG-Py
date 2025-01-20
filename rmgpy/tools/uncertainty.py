@@ -649,6 +649,13 @@ class Uncertainty(object):
                     except IndexError:
                         label = 'Library {}'.format(self.extra_species[source['Library'] - len(self.species_list)].to_chemkin())
                     dG[label] = pdG
+                if 'Library_surface' in source:
+                    pdG = g_param_engine.get_partial_uncertainty_value(source, 'Library_surface', corr_param=source['Library_surface'])
+                    try:
+                        label = 'Library_surface {}'.format(self.species_list[source['Library_surface']].to_chemkin())
+                    except IndexError:
+                        label = 'Library_surface {}'.format(self.extra_species[source['Library_surface'] - len(self.species_list)].to_chemkin())
+                    dG[label] = pdG
                 if 'QM' in source:
                     pdG = g_param_engine.get_partial_uncertainty_value(source, 'QM', corr_param=source['QM'])
                     label = 'QM {}'.format(self.species_list[source['QM']].to_chemkin())
