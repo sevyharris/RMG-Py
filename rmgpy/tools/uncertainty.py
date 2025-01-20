@@ -166,7 +166,7 @@ class KineticParameterUncertainty(object):
     """
 
     def __init__(self, dlnk_library=0.5, dlnk_training=0.5, dlnk_pdep=2.0, dlnk_family=1.0, dlnk_nonexact=3.5,
-                 dlnk_rule=0.5):
+                 dlnk_rule=0.5, dlnk_library_surface=2.659, dlnk_family_surface=2.659):
         """
         Initialize the different uncertainties dlnk
         
@@ -179,6 +179,8 @@ class KineticParameterUncertainty(object):
         self.dlnk_family = dlnk_family
         self.dlnk_nonexact = dlnk_nonexact
         self.dlnk_rule = dlnk_rule
+        self.dlnk_library_surface = dlnk_library_surface
+        self.dlnk_family_surface = dlnk_family_surface
 
     def get_uncertainty_value(self, source):
         """
@@ -190,6 +192,10 @@ class KineticParameterUncertainty(object):
             # Should be a single library reaction source
             dlnk += self.dlnk_library
             varlnk += self.dlnk_library ** 2
+        elif 'Library_surface' in source:
+            # Should be a single library reaction source
+            dlnk += self.dlnk_library_surface
+            varlnk += self.dlnk_library_surface ** 2
         elif 'PDep' in source:
             # Should be a single pdep reaction source
             dlnk += self.dlnk_pdep
@@ -207,8 +213,14 @@ class KineticParameterUncertainty(object):
             rule_weights = [ruleTuple[-1] for ruleTuple in source_dict['rules']]
             training_weights = [trainingTuple[-1] for trainingTuple in source_dict['training']]
 
-            dlnk += self.dlnk_family ** 2
-            varlnk += self.dlnk_family ** 2
+            if 'surface' in family_label.lower():
+                dlnk += self.dlnk_family_surface ** 2
+                varlnk += self.dlnk_family_surface ** 2
+            else:
+                dlnk += self.dlnk_family ** 2
+                varlnk += self.dlnk_family ** 2
+
+
             N = len(rule_weights) + len(training_weights)
             if 'node_std_dev' in source_dict:
                 # Handle autogen BM trees
@@ -271,6 +283,11 @@ class KineticParameterUncertainty(object):
                 if corr_param == source['Library']:
                     # Should be a single library reaction source
                     return self.dlnk_library
+        elif corr_source_type == 'Library_surface':
+            if 'Library_surface' in source:
+                if corr_param == source['Library_surface']:
+                    # Should be a single library reaction source
+                    return self.dlnk_library_surface
         elif corr_source_type == 'PDep':
             if 'PDep' in source:
                 if corr_param == source['PDep']:
@@ -288,7 +305,11 @@ class KineticParameterUncertainty(object):
                 source_dict = source['Rate Rules'][1]
                 exact = source_dict['exact']
 
-                dlnk = self.dlnk_family  # Base uncorrelated uncertainty just from using rate rule estimation
+                family_label = source['Rate Rules'][0]
+                if 'surface' in  family_label.lower():
+                    dlnk = self.dlnk_family_surface
+                else:
+                    dlnk = self.dlnk_family  # Base uncorrelated uncertainty just from using rate rule estimation
                 # Additional uncertainty from using non-exact rate rule
                 N = len(source_dict['rules']) + len(source_dict['training'])
                 if not exact:
