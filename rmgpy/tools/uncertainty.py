@@ -356,6 +356,7 @@ class Uncertainty(object):
         self.kinetic_input_uncertainties = None
         self.thermo_covariance_matrix = None
         self.kinetic_covariance_matrix = None
+        self.overall_covariance_matrix = None
         self.output_directory = output_directory if output_directory else os.getcwd()
 
         # For extra species needed for correlated analysis but not in model
@@ -1316,7 +1317,53 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
 
 
         return self.kinetic_covariance_matrix
+    
 
+    def get_overall_covariance_matrix(self):
+        # make combined thermo and kinetics covariance matrix, species first, then reactions
+        
+        assert not self.kinetic_input_uncertainties is None, 'Must call assign_parameter_uncertainties first'
+        assert len(self.kinetic_input_uncertainties) > 0, 'No kinetic parameters found'
+        assert self.thermo_covariance_matrix is not None, 'Must create thermo covariance matrix first'
+        assert self.kinetic_covariance_matrix is not None, 'Must create kinetics covariance matrix first'
+
+
+        def species_in_list(new_species, species_list):
+            for sp in species_list:
+                if new_species.is_isomorphic(sp):
+                    return True
+            return False
+        
+        self.overall_covariance_matrix = np.zeros((len(self.species_list) + len(self.reaction_list), len(self.species_list) + len(self.reaction_list)))
+        self.overall_covariance_matrix[:len(self.species_list), :len(self.species_list)] = self.thermo_covariance_matrix
+        self.overall_covariance_matrix[len(self.species_list):, len(self.species_list):] = self.kinetic_covariance_matrix
+
+        # fill in the covariance between reaction and species?
+
+        for i in range(len(self.reaction_list)):
+            reaction = self.reaction_list[i]
+            if type(reaction.kinetics) in [rmgpy.kinetics.surface.SurfaceArrheniusBEP, rmgpy.kinetics.surface.StickingCoefficientBEP]:
+                alpha_i = reaction.kinetics.alpha.value_si
+
+                R = 8.314472
+                T = 1000.0
+                r1_sp_indices = [self.species_list.index(sp) for sp in reaction.reactants + reaction.products]
+                r1_coefficients = [-1 for x in reaction.reactants]
+                r1_coefficients.extend([1 for x in reaction.products])
+
+                for r1 in range(len(r1_sp_indices)):  # loop over species in the reaction
+                    for j in range(len(self.species_list)):  # loop over all species
+                        covH = self.thermo_covariance_matrix[r1_sp_indices[r1], j] * 4184 * 4184  # convert from kcal/mol to J/mol
+                        nu_i = r1_coefficients[r1]
+
+                        self.overall_covariance_matrix[len(self.species_list) + i, j] += nu_i * alpha_i * covH / (R * T) / 4184  # convert back to kcal/mol
+
+        # fill in the lower triangle by copying from the top
+        for i in range(len(self.reaction_list)):
+            for j in range(len(self.species_list)):
+                self.overall_covariance_matrix[j, len(self.species_list) + i] = self.overall_covariance_matrix[len(self.species_list) + i, j]
+
+        return self.overall_covariance_matrix
 
 
 def process_local_results(results, sensitive_species, number=10):
