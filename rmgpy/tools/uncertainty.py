@@ -525,6 +525,9 @@ class Uncertainty(object):
             # and assign the source to the index of the reaction within self.reaction_list
             if 'Library' in source:
                 source['Library'] = self.reaction_list.index(reaction)
+                if reaction.is_surface_reaction():
+                    source['Library_surface'] = source.pop('Library')
+
             elif 'PDep' in source:
                 source['PDep'] = self.reaction_list.index(reaction)
             elif 'Training' in source:
@@ -739,6 +742,11 @@ class Uncertainty(object):
 
                 elif 'Library' in source:
                     dplnk = k_param_engine.get_partial_uncertainty_value(source, 'Library', source['Library'])
+                    label = 'Library {}'.format(reaction.to_chemkin(self.species_list, kinetics=False))
+                    dlnk[label] = dplnk
+
+                elif 'Library_surface' in source:
+                    dplnk = k_param_engine.get_partial_uncertainty_value(source, 'Library_surface', source['Library_surface'])
                     label = 'Library {}'.format(reaction.to_chemkin(self.species_list, kinetics=False))
                     dlnk[label] = dplnk
 
