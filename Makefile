@@ -7,6 +7,28 @@
 CC=gcc
 CXX=g++
 
+GCCVERSION = $(shell gcc --version | grep ^gcc | sed 's/^.* //g')
+
+# Check GCC version
+GCC_VERSION := $(shell gcc -dumpversion)
+MIN_VERSION := 6
+
+# Compare versions
+ifeq ($(shell echo "$(GCC_VERSION) >= $(MIN_VERSION)" | bc), 1)
+  GCC_OK = yes
+else
+  GCC_OK = no
+endif
+
+# Error if GCC version is less than 6
+ifeq ($(GCC_OK), no)
+  $(error "Error: GCC version 6 or higher is required. Found version $(GCC_VERSION).")
+endif
+
+ifeq "$(GCCVERSION)" "4.4.3"
+    CFLAGS += -Wtype-limits
+endif
+
 .PHONY : all minimal main solver check pycheck arkane clean install decython documentation test q2dtor
 
 all: pycheck main solver check
@@ -26,6 +48,7 @@ arkane:
 
 check:
 	@ python utilities.py check-dependencies
+	@ echo -e "Building with GCC version $(GCC_VERSION)"
 
 pycheck:
 	@ python utilities.py check-python
