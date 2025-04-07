@@ -43,7 +43,7 @@ class ThermoParameterUncertainty(object):
     This class is an engine that generates the species uncertainty based on its thermo sources.
     """
 
-    def __init__(self, dG_library=1.5, dG_QM=3.0, dG_GAV=1.5, dG_group=0.10, dG_ADS=6.918, dG_ADS_group=6.918, dG_surf_lib=6.918):
+    def __init__(self, dG_library=1.5, dG_QM=3.0, dG_GAV=1.5, dG_group=0.10, dG_ADS=6.918, dG_ADS_group=6.918, dG_surf_lib=6.918, dG_unknown=10.0):
         """
         Initialize the different uncertainties dG_library, dG_QM, dG_GAV, and dG_other with set values
         in units of kcal/mol.
@@ -58,6 +58,7 @@ class ThermoParameterUncertainty(object):
         self.dG_ADS = dG_ADS
         self.dG_ADS_group = dG_ADS_group
         self.dG_surf_lib = dG_surf_lib
+        self.dG_unknown = dG_unknown
 
     def get_uncertainty_value(self, source):
         """
@@ -91,6 +92,9 @@ class ThermoParameterUncertainty(object):
 
             dG += self.dG_ADS
             varG += self.dG_ADS ** 2
+        if 'Unknown' in source:
+            dG += self.dG_unknown
+            varG += self.dG_unknown ** 2
 
         # return dG
         return np.sqrt(varG)
@@ -145,6 +149,9 @@ class ThermoParameterUncertainty(object):
         elif corr_source_type == 'ADS_estimation':
             if 'ADS' in source:
                 return self.dG_ADS
+        elif corr_source_type == 'Unknown':
+            if 'Unknown' in source:
+                return self.dG_unknown
         else:
             raise Exception('Thermo correlated source must be GAV, QM, Library, Library_surface, ADS, ADS_estimation, or Estimation')
 
@@ -455,7 +462,13 @@ class Uncertainty(object):
         self.extra_species = []
         for species in self.species_list:
             if species not in self.extra_species:
-                source = self.database.thermo.extract_source_from_comments(species)
+                try:
+                    source = self.database.thermo.extract_source_from_comments(species)
+                except (ValueError):
+                    print('Problem extracting source from comments for species {0}'.format(species))
+                    # This is most likely the Missing(group) error, which probably means the database has a node with no data
+                    source = {'Unknown': species.thermo.comment}
+                    species.thermo = None
 
                 # Now prep the source data
                 # Do not alter the GAV information, but reassign QM and Library sources to the species indices that they came from
@@ -585,6 +598,11 @@ class Uncertainty(object):
                         all_thermo_sources['ADS'][ads_group] = set(ads_group_entries)
                     else:
                         all_thermo_sources['ADS'][ads_group].update(ads_group_entries)
+            if 'Unknown' in source:
+                if 'Unknown' not in all_thermo_sources:
+                    all_thermo_sources['Unknown'] = set([source['Unknown']])
+                else:
+                    all_thermo_sources['Unknown'].add(source['Unknown'])
 
                 # Convert to lists
         self.all_thermo_sources = {}
@@ -596,6 +614,8 @@ class Uncertainty(object):
         self.all_thermo_sources['ADS'] = {}
         for ads_group in all_thermo_sources['ADS'].keys():
             self.all_thermo_sources['ADS'][ads_group] = list(all_thermo_sources['ADS'][ads_group])
+        if 'Unknown' in all_thermo_sources:
+            self.all_thermo_sources['Unknown'] = list(all_thermo_sources['Unknown'])
 
         # Account for all the kinetics sources
         all_kinetic_sources = {'Rate Rules': {}, 'Training': {}, 'Library': [], 'PDep': []}
@@ -703,6 +723,9 @@ class Uncertainty(object):
                             pdG = g_param_engine.get_partial_uncertainty_value(source, 'ADS', group, adsGroupType)
                             label = 'AdsorptionGroup({}) {}'.format(adsGroupType, group.label)
                             dG[label] = pdG
+                if 'Unknown' in source:
+                    label = 'Unknown {}'.format(source['Unknown'])
+                    dG[label] = g_param_engine.get_partial_uncertainty_value(source, 'Unknown', source['Unknown'])
                 self.thermo_input_uncertainties.append(dG)
 
         for reaction in self.reaction_list:
