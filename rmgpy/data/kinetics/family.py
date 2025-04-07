@@ -4452,10 +4452,16 @@ class KineticsFamily(Database):
         degeneracy = 1
 
         regex = r"\[(.*)\]"  # only hit outermost brackets
+        training_reaction_pattern = r'Matched reaction\s*(\d+).*in.*training'
         for line in lines:
-            if line.startswith('Matched'):
+
+            training_matches = re.search(training_reaction_pattern, line)
+
+            # if line.startswith('Matched'):
+            if training_matches is not None:
                 # Source of the kinetics is from training reaction
-                training_reaction_index = int(line.split()[2])
+                # training_reaction_index = int(line.split()[2])
+                training_reaction_index = int(training_matches.group(1))
                 depository = self.get_training_depository()
                 training_entry = depository.entries[training_reaction_index]
                 # Perform sanity check that the training reaction's label matches that of the comments
@@ -4476,6 +4482,7 @@ class KineticsFamily(Database):
             elif line.startswith('Estimated'):
                 pass
             elif line.startswith('Multiplied by'):
+                # TODO replace all of these tokens with regex to make sure we don't miss things because the spacing changes
                 degeneracy = float(line.split()[-1])
 
         # Extract the rate rule information
@@ -4484,6 +4491,7 @@ class KineticsFamily(Database):
         # Check whether we're using the old rate rule templates or the new BM tree nodes
         if full_comment_string.find('for rate rule') < 0:  # New trees
             matches = []
+            # you're doing this wrong and need to make some test cases for the merge plan.
             matches = re.search(r'This reaction matched rate rule \[(.*?)\]', full_comment_string)
             if matches:
                 node = matches[1]
