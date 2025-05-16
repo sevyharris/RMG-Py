@@ -548,6 +548,13 @@ class Atom(Vertex):
         order = self.get_total_bond_order()
         self.charge = valence_electron - order - self.radical_electrons - 2 * self.lone_pairs
 
+    def get_net_charge(self):
+        """
+        Iterate through the atoms in the structure and calculate the net charge
+        on the overall molecule.
+        """
+        return sum([atom.charge for atom in self.vertices])
+
     def apply_action(self, action):
         """
         Update the atom pattern as a result of applying `action`, a tuple

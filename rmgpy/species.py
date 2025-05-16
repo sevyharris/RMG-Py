@@ -495,6 +495,14 @@ class Species(object):
         """
         return self.molecule[0].number_of_surface_sites()
 
+    def get_net_charge(self):
+        """
+        Iterate through the atoms in the structure and calculate the net charge
+        on the overall molecule.
+        """
+
+        return self.molecule[0].get_net_charge()
+
     def get_partition_function(self, T):
         """
         Return the partition function for the species at the specified
