@@ -1373,8 +1373,22 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
 
         for i in range(len(self.reaction_list)):
             reaction = self.reaction_list[i]
-            if type(reaction.kinetics) in [rmgpy.kinetics.surface.SurfaceArrheniusBEP, rmgpy.kinetics.surface.StickingCoefficientBEP]:
-                alpha_i = reaction.kinetics.alpha.value_si
+
+            BEP = None
+            BEP_types = [rmgpy.kinetics.surface.SurfaceArrheniusBEP, rmgpy.kinetics.surface.StickingCoefficientBEP]
+            if type(reaction.kinetics) in BEP_types:
+                BEP = reaction.kinetics
+            elif 'Rate Rules' not in self.reaction_sources_dict[reaction]:
+                pass  # nothing to do here if kinetics doesn't depend on thermo through a BEP
+            elif self.reaction_sources_dict[reaction]['Rate Rules'][1]['rules'] and \
+                    type(self.reaction_sources_dict[reaction]['Rate Rules'][1]['rules'][0][0].data) in BEP_types:
+                BEP = self.reaction_sources_dict[reaction]['Rate Rules'][1]['rules'][0][0].data
+            elif self.reaction_sources_dict[reaction]['Rate Rules'][1]['training'] and \
+                    type(self.reaction_sources_dict[reaction]['Rate Rules'][1]['training'][0][0].data) in BEP_types:
+                BEP = self.reaction_sources_dict[reaction]['Rate Rules'][1]['training'][0][0].data
+
+            if BEP:
+                alpha_i = BEP.alpha.value_si
 
                 R = 8.314472
                 T = 1000.0
@@ -1388,6 +1402,7 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
                         nu_i = r1_coefficients[r1]
 
                         self.overall_covariance_matrix[len(self.species_list) + i, j] += nu_i * alpha_i * covH / (R * T) / 4184  # convert back to kcal/mol
+
 
         # fill in the lower triangle by copying from the top
         for i in range(len(self.reaction_list)):
