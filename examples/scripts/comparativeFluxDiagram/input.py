@@ -43,8 +43,8 @@ model(
 
 options(
     units='si',
-    generateOutputHTML=True,
+    generateOutputHTML=False,
     generatePlots=False,
-    saveEdgeSpecies=True,
+    saveEdgeSpecies=False,
     saveSimulationProfiles=True,
 )
