@@ -4389,6 +4389,8 @@ class KineticsFamily(Database):
                     re.sub(r"(?<=]) \+ (?!Average)", ",'",      # + sign between average and non-average
                     re.sub(r"(?<!]) \+ (?!Average)", "','",     # + sign between non-averages
                     comment)))))))
+                if "['" in eval_comment_string and "']" not in eval_comment_string:
+                    eval_comment_string = eval_comment_string.replace("]", "']")
 
                 entry_nested_list = eval(eval_comment_string)
 
@@ -4433,8 +4435,8 @@ class KineticsFamily(Database):
                             'degeneracy': degeneracy,
                             'exact': boolean_exact?,
                             'rules': a list of (original rate rule entry, weight in average)
-                            'training': a list of (original rate rule entry associated with training entry, original training entry, weight in average)}]
-
+                            'training': a list of (original rate rule entry associated with training entry, original training entry, weight in average)
+                            'node': a string with info about the BM tree node}]
 
         where Exact is a boolean of whether the rate is an exact match, Template is
         the reaction template used, RateRules is a list of the rate rule entries containing
@@ -4447,6 +4449,11 @@ class KineticsFamily(Database):
         rules = None
         training_entries = None
         degeneracy = 1
+        node = ''
+
+        for line in lines:
+            if 'Ea raised from' in line:
+                break
 
         training_reaction_pattern = r'Matched reaction\s*(\d+).*in.*training'
         degeneracy_pattern = r'Multiplied by reaction path degeneracy\s*(\d+)'
@@ -4481,6 +4488,7 @@ class KineticsFamily(Database):
         # Extract the rate rule information
         full_comment_string = reaction.kinetics.comment.replace('\n', ' ')
         autogen_node_search_pattern = r'Estimated from node (.*)'
+
         # The rate rule string is right after the phrase 'for rate rule'
         template_pattern = r"for rate rule \[(.*)\]"  # only hit outermost brackets
         autogen_node_matches = re.search(autogen_node_search_pattern, full_comment_string)
@@ -4495,6 +4503,7 @@ class KineticsFamily(Database):
             elif len(tokens) > 2:  # warn the user the node is probably wrong
                 raise ValueError(f'The node name {template_str} has multiple spaces and cannot be parsed for reaction {reaction}.')
             template = self.retrieve_template([template_str])
+            node = template_str
         elif template_matches is not None:  # hand-built trees
             template_label = template_matches.group(1)
             template = self.retrieve_template(template_label.split(';'))
@@ -4502,7 +4511,7 @@ class KineticsFamily(Database):
             raise ValueError(f'Could not find rate rule in comments for reaction {reaction}.')
         rules, training_entries = self.get_sources_for_template(template)
         source_dict = {'template': template, 'degeneracy': degeneracy, 'exact': exact_rule,
-                       'rules': rules, 'training': training_entries}
+                       'rules': rules, 'training': training_entries, 'node': node}
 
         # Source of the kinetics is from rate rules
         return False, [self.label, source_dict]
