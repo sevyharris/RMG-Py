@@ -73,7 +73,7 @@ def read_thermo_entry(entry, Tmin=0, Tint=0, Tmax=0):
     the label of the species and the thermodynamics model as a :class:`NASA`
     object.
     
-    Format specification at https://shepherd.caltech.edu/EDL/PublicResources/sdt/formats/chemkin.html
+    Format specification at http://www2.galcit.caltech.edu/EDL/public/formats/chemkin.html
     """
     lines = entry.splitlines()
     species = str(lines[0][0:18].split()[0].strip())
@@ -1791,12 +1791,13 @@ def write_kinetics_entry(reaction, species_list, verbose=True, java_library=Fals
         # Remaining lines of comments taken from reaction kinetics
         if reaction.kinetics.comment:
             for line in reaction.kinetics.comment.split("\n"):
-                if len(line) > 150:
-                    short_lines = textwrap.fill(line, 150).split("\n")
-                    for short_line in short_lines:
-                        string += "! {0}\n".format(short_line)
-                else:
-                    string += "! {0}\n".format(line)
+                string += "! {0}\n".format(line)
+                # if len(line) > 150:
+                #     short_lines = textwrap.fill(line, 150).split("\n")
+                #     for short_line in short_lines:
+                #         string += "! {0}\n".format(short_line)
+                # else:
+                #     string += "! {0}\n".format(line)
 
     kinetics = reaction.kinetics
     num_reactants = len(reaction.reactants)
