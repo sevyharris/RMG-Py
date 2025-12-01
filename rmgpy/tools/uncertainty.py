@@ -30,7 +30,9 @@
 import os
 import re
 import numpy as np
+import pickle
 
+from rmgpy.data.kinetics import database
 import rmgpy.util as util
 import rmgpy.kinetics
 from rmgpy.species import Species
@@ -346,7 +348,7 @@ class Uncertainty(object):
     for a single RMG-generated mechanism.
     """
 
-    def __init__(self, species_list=None, reaction_list=None, output_directory=''):
+    def __init__(self, species_list=None, reaction_list=None, output_directory='', beef_data_path=None):
         """
         `species_list`: list of RMG species objects
         `reaction_list`: list of RMG reaction objects
@@ -365,6 +367,7 @@ class Uncertainty(object):
         self.kinetic_covariance_matrix = None
         self.overall_covariance_matrix = None
         self.output_directory = output_directory if output_directory else os.getcwd()
+        self.beef_data_path = beef_data_path
 
         # For extra species needed for correlated analysis but not in model
         self.extra_species = []
@@ -1234,6 +1237,133 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
                 for source_i in self.thermo_input_uncertainties[i].keys():
                     if source_i in self.thermo_input_uncertainties[j].keys():
                         self.thermo_covariance_matrix[i, j] += self.thermo_input_uncertainties[i][source_i] * self.thermo_input_uncertainties[j][source_i]
+        
+        
+        # load correlations between adsorbates calculated with BEEF vdW
+        # load the saved species ensemble data: this includes a numpy matrix of dG values for each species and a pickle of the species adjacency list
+        if self.beef_data_path is not None:
+            def get_i_spec(spec, species_list):
+                for i in range(len(species_list)):
+                    if spec.is_isomorphic(species_list[i]):
+                        return i
+                return None
+            
+            def get_i_group(group, group_list):
+                for i in range(len(group_list)):
+                    if group.is_identical(group_list[i]):
+                        return i
+                return None
+
+            # load the ensemble data
+            species_ensemble_matrix = np.load(self.beef_data_path)  # shape (N_species, N_ensembles) units in kJ/mol
+            N = species_ensemble_matrix.shape[1]
+            with open(os.path.join(os.path.dirname(self.beef_data_path), 'beef_species_list.pickle'), 'rb') as f:
+                # this should be a list of molecule adjacency lists
+                beef_species_list_data = pickle.load(f)
+            reconstructed_beef_species = []
+            for i in range(len(beef_species_list_data)):
+                sp = rmgpy.species.Species().from_adjacency_list(beef_species_list_data[i])
+                reconstructed_beef_species.append(sp)
+            assert len(reconstructed_beef_species) == species_ensemble_matrix.shape[0]
+
+            # now build up the big covariance matrix including adsorption correction nodes and individual species
+            # node1, ... 2000 samples
+            # node2, ... 2000 samples
+            # node3, ... 2000 samples
+            # ...
+            # species1, ... 2000 samples
+            # species2, ... 2000 samples
+            # species3, ... 2000 samples
+            # ...
+
+            assert 'adsorptionPt111' in self.database.thermo.groups, 'BEEF adsorption corrections require adsorptionPt111 group in the thermo database'
+            db_ads_group_items = [database.thermo.groups['adsorptionPt111'].entries[key].item for key in database.thermo.groups['adsorptionPt111'].entries]
+            n_groups = len(db_ads_group_items)
+            n_species = len(reconstructed_beef_species)
+            ads_ensemble_matrix = np.zeros((n_groups + n_species, N))  # units in kJ/mol
+            for i_group in range(n_groups):
+                training_specs = 0
+                for j_spc in range(n_species):
+                    if reconstructed_beef_species[j_spc].is_subgraph_isomorphic(db_ads_group_items[i_group], generate_initial_map=True):
+                        ads_ensemble_matrix[i_group, :] += species_ensemble_matrix[j_spc, :]
+                        training_specs += 1
+                
+                if training_specs > 0:
+                    ads_ensemble_matrix[i_group, :] /= training_specs
+                else:
+                    ads_ensemble_matrix[i_group, :] = np.nan  # no data
+
+            # also fill in the individual species        
+            for i in range(n_species):
+                ads_ensemble_matrix[n_groups + i, :] += species_ensemble_matrix[i, :]
+
+            ads_cov_matrix = np.cov(ads_ensemble_matrix) / 4.18 / 4.18  # convert from kJ^2/mol^2 to kcal^2/mol^2
+
+
+            # now splice this into the big thermo covariance matrix
+            for i_spc in range(len(self.species_list)):
+                for j_spc in range(len(self.species_list)):
+                    
+                    # does species use surfaceThermoPt111 lin?
+                    i_uses_pt111_lib = False
+                    j_uses_pt111_lib = False
+                    if 'surfaceThermoPt111' in self.species_list[i_spc].thermo.comment:
+                        i_uses_pt111_lib = True
+                    if 'surfaceThermoPt111' in self.species_list[j_spc].thermo.comment:
+                        j_uses_pt111_lib = True
+                    
+                    # does species use adsorptionPt111 group?
+                    i_ads_group = None
+                    j_ads_group = None
+                    if 'ADS' in self.species_sources_dict[self.species_list[i_spc]]:
+                        i_ads_group = self.species_sources_dict[self.species_list[i_spc]]['ADS']['adsorptionPt111'][0][0].item
+                    if 'ADS' in self.species_sources_dict[self.species_list[j_spc]]:
+                        j_ads_group = self.species_sources_dict[self.species_list[j_spc]]['ADS']['adsorptionPt111'][0][0].item
+
+                    # two libraries
+                    if i_uses_pt111_lib and j_uses_pt111_lib:
+                        i_spc_beef = get_i_spec(self.species_list[i_spc], reconstructed_beef_species)
+                        j_spc_beef = get_i_spec(self.species_list[j_spc], reconstructed_beef_species)
+                        if i_spc_beef is not None and j_spc_beef is not None:
+                            # add zero
+                            i_beef = n_groups + i_spc_beef
+                            j_beef = n_groups + j_spc_beef
+
+                            self.thermo_covariance_matrix[i_spc, j_spc] += ads_cov_matrix[i_beef, j_beef]
+                        else:
+                            # TODO add default value here??
+                            pass
+                    # two groups
+                    elif i_ads_group is not None and j_ads_group is not None:
+                        i_beef = get_i_group(i_ads_group, db_ads_group_items)
+                        j_beef = get_i_group(j_ads_group, db_ads_group_items)
+                        if i_beef is not None and j_beef is not None:
+                            self.thermo_covariance_matrix[i_spc, j_spc] += ads_cov_matrix[i_beef, j_beef]
+                        else:
+                            # TODO add default value here??
+                            pass
+                    elif i_uses_pt111_lib and j_ads_group is not None:
+                        i_spc_beef = get_i_spec(self.species_list[i_spc], reconstructed_beef_species)
+                        if i_spc_beef is not None:
+                            i_beef = n_groups + i_spc_beef
+                            j_beef = get_i_group(j_ads_group, db_ads_group_items)
+                            if j_beef is not None:
+                                self.thermo_covariance_matrix[i_spc, j_spc] += ads_cov_matrix[i_beef, j_beef]
+                        else:
+                            # TODO add default value here??
+                            pass
+                    elif j_uses_pt111_lib and i_ads_group is not None:
+                        j_spc_beef = get_i_spec(self.species_list[j_spc], reconstructed_beef_species)
+                        if j_spc_beef is not None:
+                            j_beef = n_groups + j_spc_beef
+                            i_beef = get_i_group(i_ads_group, db_ads_group_items)
+                            if i_beef is not None:
+                                self.thermo_covariance_matrix[i_spc, j_spc] += ads_cov_matrix[i_beef, j_beef]
+                        else:
+                            # TODO add default value here??
+                            pass
+
+        
         return self.thermo_covariance_matrix
     
     def get_kinetic_covariance_matrix(self, k_param_engine=None):
@@ -1372,23 +1502,21 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
         # fill in the covariance between reaction and species?
 
         for i in range(len(self.reaction_list)):
+            my_reactions = []
+            if type(self.reaction_list[i].kinetics) in [rmgpy.kinetics.surface.SurfaceArrheniusBEP, rmgpy.kinetics.surface.StickingCoefficientBEP]:
+                my_reactions = [self.reaction_list[i]]
+                alpha_i = reaction.kinetics.alpha.value_si
+            else:
+                # loop through and get the reaction used to estimate the BEP
+                try:
+                    other_reaction = self.reaction_sources_dict[self.reaction_list[i]]['Rate Rules'][1]['training'][0][0].data
+                    if type(other_reaction) in [rmgpy.kinetics.surface.SurfaceArrheniusBEP, rmgpy.kinetics.surface.StickingCoefficientBEP]:
+                        my_reactions = [other_reaction]
+                except KeyError:
+                    continue
             reaction = self.reaction_list[i]
-
-            BEP = None
-            BEP_types = [rmgpy.kinetics.surface.SurfaceArrheniusBEP, rmgpy.kinetics.surface.StickingCoefficientBEP]
-            if type(reaction.kinetics) in BEP_types:
-                BEP = reaction.kinetics
-            elif 'Rate Rules' not in self.reaction_sources_dict[reaction]:
-                pass  # nothing to do here if kinetics doesn't depend on thermo through a BEP
-            elif self.reaction_sources_dict[reaction]['Rate Rules'][1]['rules'] and \
-                    type(self.reaction_sources_dict[reaction]['Rate Rules'][1]['rules'][0][0].data) in BEP_types:
-                BEP = self.reaction_sources_dict[reaction]['Rate Rules'][1]['rules'][0][0].data
-            elif self.reaction_sources_dict[reaction]['Rate Rules'][1]['training'] and \
-                    type(self.reaction_sources_dict[reaction]['Rate Rules'][1]['training'][0][0].data) in BEP_types:
-                BEP = self.reaction_sources_dict[reaction]['Rate Rules'][1]['training'][0][0].data
-
-            if BEP:
-                alpha_i = BEP.alpha.value_si
+            if type(reaction.kinetics) in [rmgpy.kinetics.surface.SurfaceArrheniusBEP, rmgpy.kinetics.surface.StickingCoefficientBEP]:
+                alpha_i = reaction.kinetics.alpha.value_si
 
                 R = 8.314472
                 T = 1000.0
@@ -1403,6 +1531,23 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
 
                         self.overall_covariance_matrix[len(self.species_list) + i, j] += nu_i * alpha_i * covH / (R * T) / 4184  # convert back to kcal/mol
 
+
+            # reaction = self.reaction_list[i]
+            # if type(reaction.kinetics) in [rmgpy.kinetics.surface.SurfaceArrheniusBEP, rmgpy.kinetics.surface.StickingCoefficientBEP]:
+            #     alpha_i = reaction.kinetics.alpha.value_si
+
+            #     R = 8.314472
+            #     T = 1000.0
+            #     r1_sp_indices = [self.species_list.index(sp) for sp in reaction.reactants + reaction.products]
+            #     r1_coefficients = [-1 for x in reaction.reactants]
+            #     r1_coefficients.extend([1 for x in reaction.products])
+
+            #     for r1 in range(len(r1_sp_indices)):  # loop over species in the reaction
+            #         for j in range(len(self.species_list)):  # loop over all species
+            #             covH = self.thermo_covariance_matrix[r1_sp_indices[r1], j] * 4184 * 4184  # convert from kcal/mol to J/mol
+            #             nu_i = r1_coefficients[r1]
+
+            #             self.overall_covariance_matrix[len(self.species_list) + i, j] += nu_i * alpha_i * covH / (R * T) / 4184  # convert back to kcal/mol
 
         # fill in the lower triangle by copying from the top
         for i in range(len(self.reaction_list)):
