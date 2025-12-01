@@ -1277,14 +1277,14 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
             # ...
 
             assert 'adsorptionPt111' in self.database.thermo.groups, 'BEEF adsorption corrections require adsorptionPt111 group in the thermo database'
-            db_ads_group_items = [database.thermo.groups['adsorptionPt111'].entries[key].item for key in database.thermo.groups['adsorptionPt111'].entries]
+            db_ads_group_items = [self.database.thermo.groups['adsorptionPt111'].entries[key].item for key in self.database.thermo.groups['adsorptionPt111'].entries]
             n_groups = len(db_ads_group_items)
             n_species = len(reconstructed_beef_species)
             ads_ensemble_matrix = np.zeros((n_groups + n_species, N))  # units in kJ/mol
             for i_group in range(n_groups):
                 training_specs = 0
                 for j_spc in range(n_species):
-                    if reconstructed_beef_species[j_spc].is_subgraph_isomorphic(db_ads_group_items[i_group], generate_initial_map=True):
+                    if reconstructed_beef_species[j_spc].molecule[0].is_subgraph_isomorphic(db_ads_group_items[i_group], generate_initial_map=True):
                         ads_ensemble_matrix[i_group, :] += species_ensemble_matrix[j_spc, :]
                         training_specs += 1
                 
