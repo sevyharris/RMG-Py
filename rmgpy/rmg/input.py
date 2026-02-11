@@ -58,6 +58,7 @@ from rmgpy.solver.liquid import LiquidReactor
 from rmgpy.solver.mbSampled import MBSampledReactor
 from rmgpy.solver.simple import SimpleReactor
 from rmgpy.solver.surface import SurfaceReactor
+from rmgpy.solver.base import ReactionSystem
 from rmgpy.solver.termination import (
     TerminationConversion,
     TerminationRateRatio,
@@ -1749,14 +1750,33 @@ def save_input_file(path, rmg):
 
     # Reaction systems
     for system in rmg.reaction_systems:
-        if rmg.solvent:
+        if isinstance(system, ConstantTLiquidSurfaceReactor):
+            f.write('liquidSurfaceReactor(\n')
+            f.write('    temperature = ' + format_temperature(system) + '\n')
+            f.write('    initialConcentrations={\n')
+            for spcs, conc in system.initial_conditions['liquid'].items():
+                if spcs in ['T', 'V']:
+                    continue
+                f.write('        "{0!s}": ({1:g},"{2!s}"),\n'.format(spcs, conc, 'mol/m^3'))
+            f.write('    initialSurfaceCoverages={\n')
+            for spcs, conc_mols in system.initial_conditions['surface'].items():
+                if spcs in ['T', 'A', 'd']:
+                    continue
+                # surf conc here is in mols, need to convert back into unitless coverage fraction
+                coverage = conc_mols / (rmg.surface_site_density.value_si * system.initial_conditions['surface']['A'])
+                f.write('        "{0!s}": ({1:g}),\n'.format(spcs, coverage))
+            f.write('    },\n')
+            
+            # write the list of constant species
+            f.write(f'    constantSpecies = {system.const_spc_names},\n')
+
+            # write the surface Volume ratio, where ratio = A/V and A was originally constructed by assuming V=1 m^3
+            f.write('    surfaceVolumeRatio = ({0:g}, "{1!s}"),\n'.format(system.initial_conditions['surface']['A'], 'm^-1'))
+        elif isinstance(system, LiquidReactor):
             f.write('liquidReactor(\n')
             f.write('    temperature = ' + format_temperature(system) + '\n')
             f.write('    initialConcentrations={\n')
             for spcs, conc in system.initial_concentrations.items():
-                # conc may have been converted to SI, so we need to convert back
-                if type(conc) == float:
-                    conc = Quantity(conc, Concentration.units)
                 f.write('        "{0!s}": ({1:g},"{2!s}"),\n'.format(spcs.label, conc.value, conc.units))
         elif isinstance(system, SurfaceReactor):
             f.write('surfaceReactor(\n')
@@ -1778,8 +1798,25 @@ def save_input_file(path, rmg):
         f.write('    },\n')
 
         # Termination criteria
+        if isinstance(system, ReactionSystem):
+            terminations = system.termination
+        elif isinstance(system, Reactor):  # RMS reactor terminations need to be converted back
+            terminations = []
+            for term in system.terminations:
+                if hasattr(term, 'time'):
+                    terminations.append(TerminationTime(time=(term.time, 's')))
+                elif hasattr(term, 'ratio'):
+                    terminations.append(TerminationRateRatio(ratio=term.ratio))
+                elif isinstance(term, tuple):
+                    species, conversion = term
+                    terminations.append(TerminationConversion(spec=species, conv=conversion))
+                else:
+                    raise NotImplementedError('Termination criterion of type {0} is not currently supported for RMS reactors. Please convert this criterion to a time-based criterion or remove it from the input file.'.format(type(term)))
+        else:
+            raise NotImplementedError('Termination criteria for reaction system of type {0} not supported'.format(type(system)))
+
         conversions = ''
-        for term in system.termination:
+        for term in terminations:
             if isinstance(term, TerminationTime):
                 f.write('    terminationTime = ({0:g},"{1!s}"),\n'.format(term.time.value, term.time.units))
             elif isinstance(term, TerminationRateRatio):
