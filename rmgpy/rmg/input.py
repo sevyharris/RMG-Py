@@ -984,7 +984,7 @@ def liquid_reactor(temperature,
     if sensitivityConcentrations is None or sensitivityTemperature is None:
         sens_conditions = None
     else:
-        sens_conditions = sensitivityConcentrations
+        sens_conditions = deepcopy(sensitivityConcentrations)
         sens_conditions['T'] = Quantity(sensitivityTemperature).value_si
 
     system = LiquidReactor(T, initialConcentrations, nSims, termination, sensitive_species, sensitivityThreshold,
