@@ -1037,7 +1037,7 @@ class Uncertainty(object):
                     # reset the thermo
                     self.species_list[z].thermo = saved_thermo
 
-                    assert np.alltrue(np.array(times) == np.array(sens_times))
+                    assert np.all(np.array(times) == np.array(sens_times))
                     assert len(sens_all_concentrations) == len(all_concentrations)
 
                     # calculate the thermo sensitivity
@@ -1046,37 +1046,15 @@ class Uncertainty(object):
                         assert sensitive_species_index >= 0
                         for t in range(len(all_sensitivities)):
 
-                            # if there's not much species, continue
-                            # if all_concentrations[t][sensitive_species_index] < 1e-18:
-                            # if all_concentrations[t][sensitive_species_index] == 0:
-                            #     continue
-
                             y_perturbed = sens_all_concentrations[t][sensitive_species_index]
                             y = all_concentrations[t][sensitive_species_index]
 
                             x = enthaplies[t][z]  # J/kmol
-                            x_perturbed = x + DELTA_J_MOL * 1000.0  # convert to J/kmol for Cantera
-                            # x = 1.0
-                            # x_perturbed = DELTA_J_MOL / 4184
-                            if z == 0:
-                                print(y_perturbed - y)
 
                             if y == 0:
                                 continue
                             sensitivity = ((y_perturbed - y) / y) / (DELTA_J_MOL / 4184)
-
-                            # if sensitive_species[j].contains_surface_site():
-                            #     sensitivity = np.log(sens_all_concentrations[t][sensitive_species_index] / all_concentrations[t][sensitive_species_index]) / (DELTA_J_MOL / 4184)
-                            # else:
-                            #     sensitivity = np.log((sens_all_concentrations[t][sensitive_species_index] * sens_volumes[t]) /
-                            #                          (all_concentrations[t][sensitive_species_index] * volumes[t])) / (DELTA_J_MOL / 4184)  # convert to kcal
-
-                            # s = delta C_j / delta G_z  # indexing should apply for both surface and gas species
-                            # if self.species_list[z].contains_surface_site():
-                            #     sensitivity = np.log(sens_all_concentrations[t][sensitive_species_index] / all_concentrations[t][sensitive_species_index])
-                            # else:    
-                            # sensitivity = np.log(sens_all_concentrations[t][sensitive_species_index] / all_concentrations[t][sensitive_species_index]) / 0.1
-                            all_sensitivities[t][len(self.reaction_list) + z, j] = sensitivity  
+                            all_sensitivities[t][len(self.reaction_list) + z, j] = sensitivity
 
             # Write simulation results to CSV files
             simulation_outfile = os.path.join(self.output_directory, 'solver', f'simulation_1_{len(self.species_list):d}.csv')
@@ -1121,7 +1099,9 @@ class Uncertainty(object):
 
                         worksheet.writerow(row)
 
-            # TODO - do something parallel with plot_sensitivity
+            # Plot should be separated from the sensitivity run
+            plot_sensitivity(self.output_directory, reaction_system_index, sensitive_species,
+                             number=number, fileformat=fileformat)
 
     def local_analysis(self, sensitive_species, reaction_system_index=0, correlated=False, number=10,
                        fileformat='.png'):
@@ -1520,7 +1500,6 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
 
                         self.overall_covariance_matrix[len(self.species_list) + i, j] += nu_i * alpha_i * covH / (R * T) / 4184  # convert back to kcal/mol
 
-
         # fill in the lower triangle by copying from the top
         for i in range(len(self.reaction_list)):
             for j in range(len(self.species_list)):
@@ -1566,8 +1545,6 @@ def process_local_results(results, sensitive_species, number=10):
         output += '================================================================================\n\n'
 
     return processed_results, output
-
-
 
 
 def make_ct_interface(species_list, reaction_list):
@@ -1665,6 +1642,7 @@ surface1-reactions: []
 
     return gas, surf
 
+
 def perturb_species(species, DELTA_J_MOL=418.4):
     # takes in an RMG species object
     # change the enthalpy offset
@@ -1684,4 +1662,3 @@ def perturb_species(species, DELTA_J_MOL=418.4):
             increase = DELTA_J_MOL / R
         new_coeffs[5] += increase
         poly.coeffs = new_coeffs
-        
