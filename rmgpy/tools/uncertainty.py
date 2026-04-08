@@ -857,6 +857,11 @@ class Uncertainty(object):
             import csv
             import copy
             import cantera as ct
+            from rmgpy.quantity import Quantity
+            T = Quantity(T).value_si
+            P = Quantity(P).value_si
+            termination_time = Quantity(termination_time).value_si
+
             def same_reaction(rmg_rxn, ct_rxn):
                 # TODO make this more rigorous
                 rmg_r = set([str(x.to_chemkin()) for x in rmg_rxn.reactants])
@@ -895,7 +900,6 @@ class Uncertainty(object):
                 for i in range(surf.n_reactions):
                     assert same_reaction(self.reaction_list[i + gas.n_reactions], surf.reactions()[i])
 
-
             # convert initial_mole_fractions to dictionary with string keys instead of species objects as keys
             if type(list(initial_mole_fractions.keys())[0]) != str:
                 initial_mole_fractions = {x.to_chemkin(): initial_mole_fractions[x] for x in initial_mole_fractions}
@@ -903,9 +907,7 @@ class Uncertainty(object):
             gas_reactor = ct.IdealGasConstPressureReactor(gas, energy='off')  # isothermal to match simple reactor
 
             if surface_mech:
-                # gas_reactor = ct.IdealGasReactor(gas, energy='off')
-
-                surf.TP = T, P                
+                surf.TP = T, P
                 if type(list(initial_surface_coverages.keys())[0]) != str:
                     initial_surface_coverages = {x.to_chemkin(): initial_surface_coverages[x] for x in initial_surface_coverages}
                 surf.coverages = initial_surface_coverages
@@ -969,16 +971,12 @@ class Uncertainty(object):
 
                 all_sensitivities.append(sens_mat)
 
-
             if manual_sens or surface_mech:
 
                 # Save the species enthalpies
-
-
                 # reset all values to zero that may have been computed by Cantera
                 for t in range(len(all_sensitivities)):
                     all_sensitivities[t][len(self.reaction_list):, :] = 0.0
-
 
                 for z in range(len(self.species_list)):
 
@@ -1045,7 +1043,7 @@ class Uncertainty(object):
                     # calculate the thermo sensitivity
                     for j in range(len(sensitive_species)):
                         sensitive_species_index = self.species_list.index(sensitive_species[j])
-                        assert  sensitive_species_index >= 0
+                        assert sensitive_species_index >= 0
                         for t in range(len(all_sensitivities)):
 
                             # if there's not much species, continue
@@ -1124,8 +1122,7 @@ class Uncertainty(object):
                         worksheet.writerow(row)
 
             # TODO - do something parallel with plot_sensitivity
-        
-        
+
     def local_analysis(self, sensitive_species, reaction_system_index=0, correlated=False, number=10,
                        fileformat='.png'):
         """
@@ -1215,7 +1212,6 @@ class Uncertainty(object):
 
         return output
 
-
     def get_thermo_covariance_matrix(self):
         """
         Export the thermo covariance matrix as a numpy array
@@ -1237,7 +1233,7 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
                 for source_i in self.thermo_input_uncertainties[i].keys():
                     if source_i in self.thermo_input_uncertainties[j].keys():
                         self.thermo_covariance_matrix[i, j] += self.thermo_input_uncertainties[i][source_i] * self.thermo_input_uncertainties[j][source_i]
-        
+
         # load correlations between adsorbates calculated with BEEF vdW
         # load the saved species ensemble data: this includes a numpy matrix of dG values for each species and a pickle of the species adjacency list
         if self.thermo_corr_dir is not None:
@@ -1246,7 +1242,7 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
                     if spec.is_isomorphic(species_list[i]):
                         return i
                 return None
-            
+
             def get_i_group(group, group_list):
                 for i in range(len(group_list)):
                     if group.is_identical(group_list[i]):
@@ -1255,7 +1251,6 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
 
             # load the ensemble data
             # TODO - generalize this
-            
             my_library = 'surfaceThermoPt111'
             corr_thermo_data_file = os.path.join(self.thermo_corr_dir, f'{my_library}_cov.npy')
             self.thermo_corr_data = {my_library: np.load(corr_thermo_data_file) / 4.18 / 4.18 }  # convert from kJ^2/mol^2 to kcal^2/mol^2
@@ -1269,8 +1264,6 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
                 correlated_species.append(sp)
             assert len(correlated_species) == self.thermo_corr_data[my_library].shape[0]
 
-
-
             assert 'adsorptionPt111' in self.database.thermo.groups, 'BEEF adsorption corrections require adsorptionPt111 group in the thermo database'
             db_ads_group_items = [self.database.thermo.groups['adsorptionPt111'].entries[key].item for key in self.database.thermo.groups['adsorptionPt111'].entries]
 
@@ -1280,10 +1273,11 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
                     if correlated_species[j].molecule[0].is_subgraph_isomorphic(group, generate_initial_map=True):
                         species_used.append(j)
                 return species_used
+
             def get_cov_sp_lists(sp_list_i, sp_list_j):
                 if len(sp_list_i) == 0 or len(sp_list_j) == 0:
                     return 0
-                
+
                 cov = 0
                 for i in sp_list_i:
                     for j in sp_list_j:
@@ -1291,11 +1285,10 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
                 cov /= len(sp_list_i) * len(sp_list_j)
                 return cov
 
-
             # now splice this into the big thermo covariance matrix
             for i_spc in range(len(self.species_list)):
                 for j_spc in range(len(self.species_list)):
-                    
+
                     # does species use surfaceThermoPt111 lin?
                     i_uses_pt111_lib = False
                     j_uses_pt111_lib = False
@@ -1303,7 +1296,7 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
                         i_uses_pt111_lib = True
                     if 'surfaceThermoPt111' in self.species_list[j_spc].thermo.comment:
                         j_uses_pt111_lib = True
-                    
+
                     # does species use adsorptionPt111 group?
                     i_ads_group = None
                     j_ads_group = None
@@ -1356,8 +1349,6 @@ All off diagonals will be zero unless you call assign_parameter_uncertainties(co
                             # TODO add default value here??
                             pass
 
-        
-        
         return self.thermo_covariance_matrix
 
     def get_kinetic_covariance_matrix(self, k_param_engine=None):
@@ -1620,6 +1611,7 @@ species:
   composition: {Ar: 1}
   thermo:
     model: NASA7
+    reference-pressure: 10000.0
     temperature-ranges: [200.0, 6000.0]
     data:
     - [2.5, 0.0, 0.0, 0.0, 0.0, -745.375, 4.37967]
@@ -1636,6 +1628,7 @@ species:
   thermo:
     model: <REPLACE>X_MODEL</REPLACE>
     temperature-ranges: <REPLACE>X_TRANGES</REPLACE>
+    reference-pressure: 10000.0
     data:
     <REPLACE>X_DATA</REPLACE>
 gas-reactions: []
@@ -1656,12 +1649,13 @@ surface1-reactions: []
 
     # add each of the species and reactions
     for i in range(len(species_list)):
-        if str(species_list[i]) in gas.species_names + surf.species_names:
+        ct_species = species_list[i].to_cantera(use_chemkin_identifier=True)
+        if ct_species.name in gas.species_names + surf.species_names:
             continue
         if not species_list[i].contains_surface_site():
-            gas.add_species(species_list[i].to_cantera(use_chemkin_identifier=True))
+            gas.add_species(ct_species)
         else:
-            surf.add_species(species_list[i].to_cantera(use_chemkin_identifier=True))
+            surf.add_species(ct_species)
 
     for i in range(len(reaction_list)):
         if not reaction_list[i].is_surface_reaction():
@@ -1690,3 +1684,4 @@ def perturb_species(species, DELTA_J_MOL=418.4):
             increase = DELTA_J_MOL / R
         new_coeffs[5] += increase
         poly.coeffs = new_coeffs
+        
