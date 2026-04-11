@@ -1483,8 +1483,8 @@ phases:
   thermo: ideal-surface
   adjacent-phases: [gas]
   elements: [H, D, T, C, Ci, O, Oi, N, Ne, Ar, He, Si, S, F, Cl, Br, I, X]
-  species: [<REPLACE>X_NAME</REPLACE>]
-  site-density: <REPLACE>SURFACE_SITE_DENSITY</REPLACE>
+  species: [X(1)]
+  site-density: 2.72e-5
   kinetics: surface
   reactions:
   - surface1-reactions
@@ -1501,14 +1501,15 @@ elements:
 - symbol: X
   atomic-weight: 195.083
 species:
-- name: <REPLACE>X_NAME</REPLACE>
-  composition: <REPLACE>X_COMPOSITION</REPLACE>
+- name: X(1)
+  composition: {'X': 1.0},
   thermo:
-    model: <REPLACE>X_MODEL</REPLACE>
-    temperature-ranges: <REPLACE>X_TRANGES</REPLACE>
+    model: NASA7
+    temperature-ranges: [298.9, 1000.0, 3000.0],
     reference-pressure: 10000.0
     data:
-    <REPLACE>X_DATA</REPLACE>
+    - [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    - [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
 surface1-reactions: []
 """
@@ -1531,14 +1532,9 @@ surface1-reactions: []
     # grab the 'X' thermo - manually pass this in in case it changes or is called Pt or some other metal
     X = [x for x in species_list if x.is_surface_site()][0]
     X_ct = X.to_cantera(use_chemkin_identifier=True)
-    blank_surf_yaml = blank_surf_yaml.replace('<REPLACE>X_NAME</REPLACE>', X_ct.input_data['name'])
-    blank_surf_yaml = blank_surf_yaml.replace('<REPLACE>X_COMPOSITION</REPLACE>', str(X_ct.input_data['composition']))
-    blank_surf_yaml = blank_surf_yaml.replace('<REPLACE>X_MODEL</REPLACE>', X_ct.input_data['thermo']['model'])
-    blank_surf_yaml = blank_surf_yaml.replace('<REPLACE>X_TRANGES</REPLACE>', str(X_ct.input_data['thermo']['temperature-ranges']))
-    data = '- ' + '    - '.join([str(x) + '\n' for x in X_ct.input_data['thermo']['data']]).strip()
-    blank_surf_yaml = blank_surf_yaml.replace('<REPLACE>X_DATA</REPLACE>', data)
-    blank_surf_yaml = blank_surf_yaml.replace('<REPLACE>SURFACE_SITE_DENSITY</REPLACE>', str(surface_site_density))  # SI units of mol/m^2
     surf = ct.Interface(yaml=blank_surf_yaml, name='surface1', adjacent=[gas])
+    surf.modify_species(0, X_ct)
+    surf.site_density = surface_site_density / 1000.0  # convert from mol/m^2 to kmol/m^2 for Cantera
 
     # add the species and reactions to the surface phase if they're not already in there
     for i in range(len(species_list)):
