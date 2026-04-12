@@ -855,16 +855,19 @@ class Uncertainty(object):
 
         else:  # If we implement surface sensitivity in RMG's SurfaceReactor, this entire section could be like ten lines
             import cantera as ct
-            gas, surf = make_ct_phases(self.species_list, self.reaction_list, surface_site_density=surface_site_density, surface_volume_ratio=surface_volume_ratio)
+            gas, surf = make_ct_phases(self.species_list, self.reaction_list, surface_site_density=surface_site_density)
 
             # convert initial_mole_fractions to dictionary with string keys instead of species objects as keys
             if not isinstance(list(initial_mole_fractions.keys())[0], str):
                 initial_mole_fractions = {x.to_chemkin(): initial_mole_fractions[x] for x in initial_mole_fractions}
-            gas.TPX = T, P, initial_mole_fractions
+            gas.TPX = T.value_si, P.value_si, initial_mole_fractions
             gas_reactor = ct.IdealGasConstPressureReactor(gas, energy='off')  # isothermal and isobaric to match simple reactor
 
+            # match initial volume to RMG's simple reactor using PV=nRT
+            # gas_reactor.volume = (ct.gas_constant / 1000.0) * T.value_si * np.sum(list(initial_mole_fractions.values())) / P.value_si  # volume in m^3
+
             if surface_mech:
-                surf.TP = T, P
+                surf.TP = T.value_si, P.value_si
                 if not isinstance(list(initial_surface_coverages.keys())[0], str):
                     initial_surface_coverages = {x.to_chemkin(): initial_surface_coverages[x] for x in initial_surface_coverages}
                 surf.coverages = initial_surface_coverages
@@ -881,22 +884,23 @@ class Uncertainty(object):
 
             # order of all_sensitivities is gas reactions, surface reactions, gas species, surface species
             all_sensitivities = [np.zeros((len(self.species_list) + len(self.reaction_list), len(sensitive_species)))]
-            all_concentrations = [gas_reactor.thermo.X]
+            all_concentrations = [gas_reactor.thermo.X.copy()]
             if surface_mech:
-                all_concentrations = [np.concatenate((gas_reactor.thermo.X, surf.concentrations / surf.site_density))]
+                all_concentrations = [np.concatenate((gas_reactor.thermo.X.copy(), surf.concentrations / surf.site_density))]
                 enthaplies = [np.concatenate((gas.standard_enthalpies_RT * ct.gas_constant * gas.T, surf.standard_enthalpies_RT * ct.gas_constant * surf.T))]
 
             # Use Cantera's inbuilt sensitivity
             # Add all reactions and species as sensitive parameters
+            n_surf_reactions = len(self.reaction_list) - gas.n_reactions  # can't use surf.n_reactions here because surf could be None
+            n_surf_species = len(self.species_list) - gas.n_species  # can't use surf.n_species here because surf could be None
             for i in range(gas.n_reactions):
                 gas_reactor.add_sensitivity_reaction(i)
-            if surface_mech:
-                for i in range(surf.n_reactions):
-                    surf_reactor.add_sensitivity_reaction(i)
+            for i in range(n_surf_reactions):
+                surf_reactor.add_sensitivity_reaction(i)
             for i in range(gas.n_species):
                 gas_reactor.add_sensitivity_species_enthalpy(i)
             # # surface sensitivity species not yet implemented in Cantera
-            # for i in range(surf.n_species):
+            # for i in range(n_surf_species):
             #     surf_reactor.add_sensitivity_species_enthalpy(i)
             while net.time < termination_time:
                 net.step()
@@ -904,13 +908,12 @@ class Uncertainty(object):
                 volumes.append(gas_reactor.volume)
                 pressures.append(gas.P)
                 temperatures.append(gas.T)
-                time_array = np.array(times)
 
                 if not surface_mech:
-                    all_concentrations.append(gas_reactor.thermo.X)
+                    all_concentrations.append(gas_reactor.thermo.X.copy())
                     enthaplies.append(gas.standard_enthalpies_RT * ct.gas_constant * gas.T)
                 else:
-                    all_concentrations.append(np.concatenate((gas_reactor.thermo.X, surf.concentrations / surf.site_density)))
+                    all_concentrations.append(np.concatenate((gas_reactor.thermo.X.copy(), surf.concentrations / surf.site_density)))
                     enthaplies.append(np.concatenate((gas.standard_enthalpies_RT * ct.gas_constant * gas.T, surf.standard_enthalpies_RT * ct.gas_constant * surf.T)))
                 sens_mat = np.zeros((len(self.species_list) + len(self.reaction_list), len(sensitive_species)))
                 # record sensitivities
@@ -919,15 +922,15 @@ class Uncertainty(object):
                         sens_mat[i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), i)
                     for i in range(gas.n_species):  # gas species
                         sens_mat[len(self.reaction_list) + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), len(self.reaction_list) + i) * 4.184 * 1e6  # convert from J/kmol to kcal / mol
-                    for i in range(len(self.reaction_list) - gas.n_reactions):  # surface reactions
+                    for i in range(n_surf_reactions):  # surface reactions
                         sens_mat[gas.n_reactions + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), gas.n_reactions + i)
                     # Not Yet Implemented in Cantera, so we set the values to nan for now and estimate manually later
-                    for i in range(surf.n_species):  # surface species
+                    for i in range(n_surf_species):  # surface species
                         # sens_mat[len(self.reaction_list) + gas.n_species + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), len(self.reaction_list) + gas.n_species + i)
                         sens_mat[len(self.reaction_list) + gas.n_species + i, j] = np.nan
 
                 all_sensitivities.append(sens_mat)
-
+            time_array = np.array(times)
             # ------------------------------------------------------------------------------------------
             # TODO remove this if surface species sensitivty gets implemented in Cantera
             # or if RMG's SurfaceReactor sensitivity gets implemented
@@ -990,9 +993,12 @@ class Uncertainty(object):
                 # add header row:
                 worksheet.writerow(header)
 
-                # add mole fractions:
+                # add number of moles:
                 for t in range(len(time_array)):
                     row = [time_array[t], volumes[t], temperatures[t], pressures[t]]
+                    # total_moles = pressures[t] * volumes[t] / ((ct.gas_constant / 1000.0) * temperatures[t])
+                    # all_concentrations is really mole fractions of gas
+                    # row.extend(np.array(all_concentrations[t]) * total_moles)  # convert to moles of each species by multiplying mole fraction by total moles
                     row.extend([all_concentrations[t][i] for i in range(len(self.species_list))])
                     worksheet.writerow(row)
 
