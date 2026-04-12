@@ -786,7 +786,7 @@ class Uncertainty(object):
 
     def sensitivity_analysis(self, initial_mole_fractions, sensitive_species, T, P, termination_time,
                              sensitivity_threshold=1e-3, number=10, fileformat='.png', initial_surface_coverages=None,
-                             surface_volume_ratio=None, surface_site_density=2.72e-5, use_cantera=False):
+                             surface_volume_ratio=None, surface_site_density=2.72e-5, use_cantera=False, cantera_file=None):
         """
         Run sensitivity analysis using the RMG solver in a single ReactionSystem object
 
@@ -803,6 +803,10 @@ class Uncertainty(object):
         surface_mech = any([x.contains_surface_site() for x in self.species_list])
         if surface_mech:
             assert use_cantera, 'Must use Cantera for sensitivity analysis for surface mechanisms'
+
+            # for now, require a cantera file to be provided for surface mechanisms
+            # because initializing through objects in memory is slightly buggy and does not match RMG's simple reactor
+            assert cantera_file is not None, 'Must provide cantera_file for sensitivity analysis for surface mechanisms'
 
         # Create the csv worksheets for logging sensitivity
         util.make_output_subdirectory(self.output_directory, 'solver')
@@ -855,7 +859,7 @@ class Uncertainty(object):
 
         else:  # If we implement surface sensitivity in RMG's SurfaceReactor, this entire section could be like ten lines
             import cantera as ct
-            gas, surf = make_ct_phases(self.species_list, self.reaction_list, surface_site_density=surface_site_density)
+            gas, surf = make_ct_phases(self.species_list, self.reaction_list, surface_site_density=surface_site_density, cantera_file=cantera_file)
 
             # convert initial_mole_fractions to dictionary with string keys instead of species objects as keys
             if not isinstance(list(initial_mole_fractions.keys())[0], str):
@@ -1474,7 +1478,7 @@ def process_local_results(results, sensitive_species, number=10):
     return processed_results, output
 
 
-def make_ct_phases(species_list, reaction_list, surface_site_density=2.7e-5):
+def make_ct_phases(species_list, reaction_list, surface_site_density=2.7e-5, cantera_file=None):
     """Make Cantera gas and surface phases with the given species and reactions.
     It is not yet possible to instantiate a Cantera Interface object by passing objects through memory
     https://github.com/Cantera/enhancements/issues/216
@@ -1482,6 +1486,19 @@ def make_ct_phases(species_list, reaction_list, surface_site_density=2.7e-5):
     """
     import cantera as ct
 
+    assert cantera_file is not None, 'Cantera file must be provided to use make_ct_phases'
+    surface_mech = any([x.contains_surface_site() for x in species_list])
+    gas = ct.Solution(cantera_file)
+    surf = None
+    if surface_mech:
+        try:
+            surf = ct.Interface(cantera_file, 'surface1', adjacent=[gas])
+        except ct.CanteraError:
+            surf = ct.Interface(cantera_file, 'SURF0', adjacent=[gas])
+        surf.site_density = surface_site_density / 1000.0  # convert from mol/m^2 to kmol/m^2 for Cantera
+    return gas, surf
+
+    # TODO - debug why this doesn't work when we try to add the species and reactions through memory instead of through a file
     blank_surf_yaml = """
 units: {length: m, time: s, quantity: mol, activation-energy: J/mol}
 phases:
