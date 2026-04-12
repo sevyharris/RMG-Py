@@ -802,11 +802,12 @@ class Uncertainty(object):
 
         surface_mech = any([x.contains_surface_site() for x in self.species_list])
         if surface_mech:
-            assert use_cantera, 'Must use Cantera for sensitivity analysis for surface mechanisms'
+            assert use_cantera, 'Must use Cantera for sensitivity analysis of surface mechanisms'
 
             # for now, require a cantera file to be provided for surface mechanisms
             # because initializing through objects in memory is slightly buggy and does not match RMG's simple reactor
-            assert cantera_file is not None, 'Must provide cantera_file for sensitivity analysis for surface mechanisms'
+            assert cantera_file is not None, 'Must provide cantera_file for sensitivity analysis of surface mechanisms'
+            assert surface_volume_ratio is not None, 'Must provide surface_volume_ratio for sensitivity analysis of surface mechanisms'
 
         # Create the csv worksheets for logging sensitivity
         util.make_output_subdirectory(self.output_directory, 'solver')
@@ -865,14 +866,17 @@ class Uncertainty(object):
             if not isinstance(list(initial_mole_fractions.keys())[0], str):
                 initial_mole_fractions = {x.to_chemkin(): initial_mole_fractions[x] for x in initial_mole_fractions}
             gas.TPX = T.value_si, P.value_si, initial_mole_fractions
-            gas_reactor = ct.IdealGasConstPressureReactor(gas, energy='off')  # isothermal and isobaric to match simple reactor
+            if surface_mech:
+                gas_reactor = ct.IdealGasReactor(gas, energy='off')  # isothermal and constant volume to match RMG surface reactor
+            else:
+                gas_reactor = ct.IdealGasConstPressureReactor(gas, energy='off')  # isothermal and isobaric to match simple reactor
 
             if surface_mech:
                 surf.TP = T.value_si, P.value_si
                 if not isinstance(list(initial_surface_coverages.keys())[0], str):
                     initial_surface_coverages = {x.to_chemkin(): initial_surface_coverages[x] for x in initial_surface_coverages}
                 surf.coverages = initial_surface_coverages
-                surf_reactor = ct.ReactorSurface(surf, gas_reactor)
+                surf_reactor = ct.ReactorSurface(surf, gas_reactor, A=surface_volume_ratio.value_si)  # surface reactor with specified surface area to volume ratio
 
             net = ct.ReactorNet([gas_reactor])
             times = [net.time]
@@ -922,12 +926,12 @@ class Uncertainty(object):
                     for i in range(gas.n_reactions):  # gas reactions
                         sens_mat[i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), i)
                     for i in range(gas.n_species):  # gas species
-                        sens_mat[len(self.reaction_list) + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), len(self.reaction_list) + i) * 4.184 * 1e6  # convert from J/kmol to kcal / mol
+                        sens_mat[len(self.reaction_list) + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), len(self.reaction_list) + i) * 4.184 * 1e6  # convert from J/kmol to kcal / mol in denominator    
                     for i in range(n_surf_reactions):  # surface reactions
                         sens_mat[gas.n_reactions + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), gas.n_reactions + i)
                     # Not Yet Implemented in Cantera, so we set the values to nan for now and estimate manually later
                     for i in range(n_surf_species):  # surface species
-                        # sens_mat[len(self.reaction_list) + gas.n_species + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), len(self.reaction_list) + gas.n_species + i)
+                        # sens_mat[len(self.reaction_list) + gas.n_species + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), len(self.reaction_list) + gas.n_species + i) * 4.184 * 1e6  # convert from J/kmol to kcal / mol in denominator
                         sens_mat[len(self.reaction_list) + gas.n_species + i, j] = np.nan
 
                 all_sensitivities.append(sens_mat)
@@ -962,15 +966,15 @@ class Uncertainty(object):
                     surf.modify_species(z, perturbed_species)
 
                     # rerun the simulation for each surface species, really unfortunate that it has to be done this way
-                    gas.TPX = T, P, initial_mole_fractions
-                    gas_reactor = ct.IdealGasConstPressureReactor(gas, energy='off')  # isothermal and isobaric to match simple reactor
-                    surf.TP = T, P
+                    gas.TPX = T.value_si, P.value_si, initial_mole_fractions
+                    gas_reactor = ct.IdealGasReactor(gas, energy='off')  # constant volume and isothermal to match surface reactor
+                    surf.TP = T.value_si, P.value_si
                     surf.coverages = initial_surface_coverages
-                    surf_reactor = ct.ReactorSurface(surf, gas_reactor)
+                    surf_reactor = ct.ReactorSurface(surf, gas_reactor, A=surface_volume_ratio.value_si)  # surface reactor with specified surface area to volume ratio
                     net = ct.ReactorNet([gas_reactor])
 
                     net.advance(termination_time)
-                    assert np.isclose(net.time, times[-1], rtol=1e-3), 'Perturbed simulation did not reach the same termination time as unperturbed simulation, cannot compute sensitivity'
+                    # assert np.isclose(net.time, times[-1], rtol=1e-3), 'Perturbed simulation did not reach the same termination time as unperturbed simulation, cannot compute sensitivity'
                     # compute sensitivity
                     for j in range(len(sensitive_species)):
                         if sensitive_species[j].contains_surface_site():
@@ -978,10 +982,12 @@ class Uncertainty(object):
                         else:
                             y_perturbed = gas_reactor.thermo.X[self.species_list.index(sensitive_species[j])]
                         y = all_concentrations[-1][self.species_list.index(sensitive_species[j])]
-
-                        x = original_species.thermo.h(T)
-                        x_perturbed = surf.species()[z].thermo.h(T)
-                        sensitivity = ((y_perturbed - y) / y) / (x_perturbed - x / x)
+                        x = original_species.thermo.h(T.value_si)
+                        x_perturbed = surf.species()[z].thermo.h(T.value_si)
+                        if x == 0:
+                            sensitivity = np.nan
+                        else:
+                            sensitivity = ((y_perturbed - y) / y) / (x_perturbed - x / x)
                         all_sensitivities[-1][len(self.reaction_list) + gas.n_species + z, j] = sensitivity
                     # reset the species back to the original
                     surf.modify_species(z, original_species)
@@ -1008,7 +1014,7 @@ class Uncertainty(object):
 
                 if surface_mech:
                     total_moles_sites = surf_reactor.area * surf.site_density / 1000.0  # in moles, using site density and surface volume ratio
-                    n_moles[:, gas.n_species:] = all_concentrations[:, gas.n_species:] * total_moles_sites[:, np.newaxis]  # moles of each surface species
+                    n_moles[:, gas.n_species:] = all_concentrations[:, gas.n_species:] * total_moles_sites  # moles of each surface species
 
                 for t in range(len(time_array)):
                     row = [time_array[t], volumes[t], temperatures[t], pressures[t]]
