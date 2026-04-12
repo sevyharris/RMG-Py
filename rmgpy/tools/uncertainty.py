@@ -867,9 +867,6 @@ class Uncertainty(object):
             gas.TPX = T.value_si, P.value_si, initial_mole_fractions
             gas_reactor = ct.IdealGasConstPressureReactor(gas, energy='off')  # isothermal and isobaric to match simple reactor
 
-            # match initial volume to RMG's simple reactor using PV=nRT
-            # gas_reactor.volume = (ct.gas_constant / 1000.0) * T.value_si * np.sum(list(initial_mole_fractions.values())) / P.value_si  # volume in m^3
-
             if surface_mech:
                 surf.TP = T.value_si, P.value_si
                 if not isinstance(list(initial_surface_coverages.keys())[0], str):
@@ -935,6 +932,10 @@ class Uncertainty(object):
 
                 all_sensitivities.append(sens_mat)
             time_array = np.array(times)
+            temperatures = np.array(temperatures)
+            pressures = np.array(pressures)
+            volumes = np.array(volumes)
+
             # ------------------------------------------------------------------------------------------
             # TODO remove this if surface species sensitivty gets implemented in Cantera
             # or if RMG's SurfaceReactor sensitivity gets implemented
@@ -987,6 +988,7 @@ class Uncertainty(object):
             # ------------------------------------------------------------------------------------------
 
             # Write simulation results to CSV files
+            all_concentrations = np.array(all_concentrations)
             simulation_outfile = os.path.join(self.output_directory, 'solver', f'simulation_1_{len(self.species_list):d}.csv')
             with open(simulation_outfile, 'w') as outfile:
                 header = ['Time (s)', 'Volume (m^3)', 'Temperature (K)', 'Pressure (Pa)']
@@ -998,12 +1000,20 @@ class Uncertainty(object):
                 worksheet.writerow(header)
 
                 # add number of moles:
+                n_moles = np.empty_like(all_concentrations)
+
+                # Use ideal gas law to get total moles of gas
+                total_moles_gas = np.multiply(pressures, volumes) / ((ct.gas_constant / 1000.0) * temperatures)  # in moles, using PV=nRT and converting R to kJ/mol*K
+                n_moles[:, :gas.n_species] = all_concentrations[:, :gas.n_species] * total_moles_gas[:, np.newaxis]  # moles of each species
+
+                if surface_mech:
+                    total_moles_sites = surf_reactor.area * surf.site_density / 1000.0  # in moles, using site density and surface volume ratio
+                    n_moles[:, gas.n_species:] = all_concentrations[:, gas.n_species:] * total_moles_sites[:, np.newaxis]  # moles of each surface species
+
                 for t in range(len(time_array)):
                     row = [time_array[t], volumes[t], temperatures[t], pressures[t]]
-                    # total_moles = pressures[t] * volumes[t] / ((ct.gas_constant / 1000.0) * temperatures[t])
-                    # all_concentrations is really mole fractions of gas
-                    # row.extend(np.array(all_concentrations[t]) * total_moles)  # convert to moles of each species by multiplying mole fraction by total moles
-                    row.extend([all_concentrations[t][i] for i in range(len(self.species_list))])
+                    # record number of moles
+                    row.extend(n_moles[t, :])  # convert to moles of each species by multiplying mole fraction by total moles
                     worksheet.writerow(row)
 
             # Write sensitivities to CSV files, one file per sensitive species
