@@ -174,6 +174,7 @@ class TestUncertainty:
         )
         np.testing.assert_allclose(
             kinetic_unc,
-            [0.5, 1.5, 3.169924, 3.169924, 2.553605, 0.5, 2.0, 2.553605, 2.553605, 0.5],
+            # the 13.598 value comes from the SIDT tree node uncertainty: 11.54 + non-exact penalty for N=1: log10(1+1) * 3.5 + family uncertainty: 1.0
+            [0.5, 1.5, 3.169924, 3.169924, 2.553605, 0.5, 2.0, 13.5938, 13.5938, 0.5],
             rtol=1e-4
         )
