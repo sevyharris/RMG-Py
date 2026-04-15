@@ -30,6 +30,7 @@
 import os
 
 
+from arkane.input import species
 import numpy as np
 
 import rmgpy
@@ -177,3 +178,46 @@ class TestUncertainty:
             [0.5, 1.118, 1.9783, 1.9783, 1.5363, 0.5, 2.0, 11.6312, 11.6312, 0.5],
             rtol=1e-4
         )
+
+    def test_specific_species_uncertainties(self):
+        """
+        Test uncertainties for a few specific examples
+        """
+
+        expected_results = {  # order is (total_uncertainty, [group_names], [group_counts])
+            'CCCC': (2.5199409675625337, ['Cs-CsCsHH', 'Cs-CsHHH'], [2, 2]),
+            'CCCCCCCCCC': (6.091048438487417, ['Cs-CsCsHH', 'Cs-CsHHH'], [8, 2]),
+            'CC(OO)CC': (2.5199409675625337, ['O2s-OsCs', 'O2s-OsH', 'Cs-CsCsOsH', 'Cs-CsCsHH', 'Cs-CsHHH'], [1, 1, 1, 1, 2]),
+            'C=NCC': (2.07365649035707, ['N3d-CdCs', 'Cs-(N3dCd)CsHH', 'Cs-CsHHH', 'Cd-N3dHH'], [1, 1, 1, 1]),
+            'C=C': (2.07365649035707, ['Cds-CdsHH'], [2]),
+            'C*': (7.271261019245562, ['CH3'], [1]),  # Gas library + radical + adsorption correction
+            'O=[CH]*': (7.150786643440007, ['Cds-OdHH', 'HCdsJO'], [1, 1]),  # GAV + radical + adsorption correction
+        }
+
+        uncertainty = rmgpy.tools.uncertainty.Uncertainty()
+        uncertainty.database = self.uncertainty.database  # use the same database as the main test
+        new_species_list = [rmgpy.species.Species(smiles=spc) for spc in expected_results.keys()]
+        for spc in new_species_list:
+            spc.thermo = self.uncertainty.database.thermo.get_thermo_data(spc)
+            if not isinstance(spc.thermo, rmgpy.thermo.NASA):
+                spc.thermo = spc.thermo.to_nasa(Tmin=298, Tmax=3000, Tint=1000)
+        uncertainty.species_list = new_species_list
+        uncertainty.reaction_list = []  # no need to test kinetics here
+
+        uncertainty.extract_sources_from_model()  # this will populate the sources dict with the new species
+        uncertainty.assign_parameter_uncertainties()  # this will assign the uncertainties based on the sources and the database
+
+        for i, sp in enumerate(uncertainty.species_list):
+            source = uncertainty.species_sources_dict[sp]
+
+            group_counts = []
+            group_names = []
+            for group_type, group_entries in source['GAV'].items():
+                for group, count in group_entries:
+                    group_names.append(group.label)
+                    group_counts.append(count)
+
+            result = expected_results[sp.smiles]
+            assert np.isclose(uncertainty.thermo_input_uncertainties[i], result[0], rtol=1e-4)
+            assert group_names == result[1]
+            assert group_counts == result[2]
