@@ -728,7 +728,8 @@ class Uncertainty(object):
                 self.kinetic_input_uncertainties.append(dlnk)
 
     def sensitivity_analysis(self, initial_mole_fractions, sensitive_species, T, P, termination_time,
-                             sensitivity_threshold=1e-3, number=10, fileformat='.png'):
+                             sensitivity_threshold=1e-3, number=10, fileformat='.png', initial_surface_coverages=None,
+                             surface_volume_ratio=None, surface_site_density=2.72e-5, use_cantera=False, cantera_file=None):
         """
         Run sensitivity analysis using the RMG solver in a single ReactionSystem object
 
@@ -736,58 +737,263 @@ class Uncertainty(object):
         sensitive_species is a list of sensitive Species objects
         number is the number of top species thermo or reaction kinetics desired to be plotted
         """
-
+        import csv
         from rmgpy.solver import SimpleReactor, TerminationTime
         from rmgpy.quantity import Quantity
         from rmgpy.rmg.listener import SimulationProfileWriter, SimulationProfilePlotter
         from rmgpy.rmg.settings import ModelSettings, SimulatorSettings
-        T = Quantity(T)
-        P = Quantity(P)
-        termination = [TerminationTime(Quantity(termination_time))]
 
-        reaction_system = SimpleReactor(T=T,
-                                        P=P,
-                                        initial_mole_fractions=initial_mole_fractions,
-                                        termination=termination,
-                                        sensitive_species=sensitive_species,
-                                        sensitivity_threshold=sensitivity_threshold)
+        surface_mech = any([x.contains_surface_site() for x in self.species_list])
+        if surface_mech:
+            assert use_cantera, 'Must use Cantera for sensitivity analysis of surface mechanisms'
+
+            # for now, require a cantera file to be provided for surface mechanisms
+            # because initializing through objects in memory is slightly buggy and does not match RMG's simple reactor
+            assert cantera_file is not None, 'Must provide cantera_file for sensitivity analysis of surface mechanisms'
+            assert surface_volume_ratio is not None, 'Must provide surface_volume_ratio for sensitivity analysis of surface mechanisms'
+            surface_volume_ratio = Quantity(surface_volume_ratio)
 
         # Create the csv worksheets for logging sensitivity
         util.make_output_subdirectory(self.output_directory, 'solver')
         sens_worksheet = []
         reaction_system_index = 0
-        for spec in reaction_system.sensitive_species:
+        for spec in sensitive_species:
             csvfile_path = os.path.join(self.output_directory, 'solver',
                                         'sensitivity_{0}_SPC_{1}.csv'.format(reaction_system_index + 1, spec.index))
             sens_worksheet.append(csvfile_path)
 
-        reaction_system.attach(SimulationProfileWriter(
-            self.output_directory, reaction_system_index, self.species_list))
-        reaction_system.attach(SimulationProfilePlotter(
-            self.output_directory, reaction_system_index, self.species_list))
+        T = Quantity(T)
+        P = Quantity(P)
+        termination_time = Quantity(termination_time)
+        termination = [TerminationTime(termination_time)]
+        if not use_cantera:
+            reaction_system = SimpleReactor(T=T,
+                                            P=P,
+                                            initial_mole_fractions=initial_mole_fractions,
+                                            termination=termination,
+                                            sensitive_species=sensitive_species,
+                                            sensitivity_threshold=sensitivity_threshold)
 
-        simulator_settings = SimulatorSettings()  # defaults
+            reaction_system.attach(SimulationProfileWriter(
+                self.output_directory, reaction_system_index, self.species_list))
+            reaction_system.attach(SimulationProfilePlotter(
+                self.output_directory, reaction_system_index, self.species_list))
 
-        model_settings = ModelSettings()  # defaults
-        model_settings.tol_move_to_core = 0.1
-        model_settings.tol_interrupt_simulation = 1.0
-        model_settings.tol_keep_in_edge = 0.0
+            simulator_settings = SimulatorSettings()  # defaults
 
-        reaction_system.simulate(
-            core_species=self.species_list,
-            core_reactions=self.reaction_list,
-            edge_species=[],
-            edge_reactions=[],
-            surface_species=[],
-            surface_reactions=[],
-            model_settings=model_settings,
-            simulator_settings=simulator_settings,
-            sensitivity=True,
-            sens_worksheet=sens_worksheet,
-        )
+            model_settings = ModelSettings()  # defaults
+            model_settings.tol_move_to_core = 0.1
+            model_settings.tol_interrupt_simulation = 1.0
+            model_settings.tol_keep_in_edge = 0.0
 
-        plot_sensitivity(self.output_directory, reaction_system_index, reaction_system.sensitive_species,
-                         number=number, fileformat=fileformat)
+            reaction_system.simulate(
+                core_species=self.species_list,
+                core_reactions=self.reaction_list,
+                edge_species=[],
+                edge_reactions=[],
+                surface_species=[],
+                surface_reactions=[],
+                model_settings=model_settings,
+                simulator_settings=simulator_settings,
+                sensitivity=True,
+                sens_worksheet=sens_worksheet,
+            )
+
+            # Plot should be separated from the sensitivity run
+            plot_sensitivity(self.output_directory, reaction_system_index, reaction_system.sensitive_species,
+                             number=number, fileformat=fileformat)
+
+        else:  # If we implement surface sensitivity in RMG's SurfaceReactor, this entire section could be like ten lines
+            import cantera as ct
+            gas, surf = make_ct_phases(self.species_list, self.reaction_list, surface_site_density=surface_site_density, cantera_file=cantera_file)
+
+            # convert initial_mole_fractions to dictionary with string keys instead of species objects as keys
+            if not isinstance(list(initial_mole_fractions.keys())[0], str):
+                initial_mole_fractions = {x.to_chemkin(): initial_mole_fractions[x] for x in initial_mole_fractions}
+            gas.TPX = T.value_si, P.value_si, initial_mole_fractions
+            if surface_mech:
+                gas_reactor = ct.IdealGasReactor(gas, energy='off')  # isothermal and constant volume to match RMG surface reactor
+            else:
+                gas_reactor = ct.IdealGasConstPressureReactor(gas, energy='off')  # isothermal and isobaric to match simple reactor
+
+            if surface_mech:
+                surf.TP = T.value_si, P.value_si
+                if not isinstance(list(initial_surface_coverages.keys())[0], str):
+                    initial_surface_coverages = {x.to_chemkin(): initial_surface_coverages[x] for x in initial_surface_coverages}
+                surf.coverages = initial_surface_coverages
+                surf_reactor = ct.ReactorSurface(surf, gas_reactor, A=surface_volume_ratio.value_si)  # surface reactor with specified surface area to volume ratio
+
+            net = ct.ReactorNet([gas_reactor])
+            times = [net.time]
+            volumes = [gas_reactor.volume]
+            pressures = [gas.P]
+            temperatures = [gas.T]
+
+            # also save enthalpies for sensitiviity
+            enthaplies = [gas.standard_enthalpies_RT * ct.gas_constant * gas.T]
+
+            # order of all_sensitivities is gas reactions, surface reactions, gas species, surface species
+            all_sensitivities = [np.zeros((len(self.species_list) + len(self.reaction_list), len(sensitive_species)))]
+            all_concentrations = [gas_reactor.thermo.X.copy()]
+            if surface_mech:
+                all_concentrations = [np.concatenate((gas_reactor.thermo.X.copy(), surf.concentrations / surf.site_density))]
+                enthaplies = [np.concatenate((gas.standard_enthalpies_RT * ct.gas_constant * gas.T, surf.standard_enthalpies_RT * ct.gas_constant * surf.T))]
+
+            # Use Cantera's inbuilt sensitivity
+            # Add all reactions and species as sensitive parameters
+            n_surf_reactions = len(self.reaction_list) - gas.n_reactions  # can't use surf.n_reactions here because surf could be None
+            n_surf_species = len(self.species_list) - gas.n_species  # can't use surf.n_species here because surf could be None
+            for i in range(gas.n_reactions):
+                gas_reactor.add_sensitivity_reaction(i)
+            for i in range(n_surf_reactions):
+                surf_reactor.add_sensitivity_reaction(i)
+            for i in range(gas.n_species):
+                gas_reactor.add_sensitivity_species_enthalpy(i)
+            # # surface sensitivity species not yet implemented in Cantera
+            # for i in range(n_surf_species):
+            #     surf_reactor.add_sensitivity_species_enthalpy(i)
+            while net.time < termination_time.value_si:
+                net.step()
+                times.append(net.time)
+                volumes.append(gas_reactor.volume)
+                pressures.append(gas.P)
+                temperatures.append(gas.T)
+
+                if not surface_mech:
+                    all_concentrations.append(gas_reactor.thermo.X.copy())
+                    enthaplies.append(gas.standard_enthalpies_RT * ct.gas_constant * gas.T)
+                else:
+                    all_concentrations.append(np.concatenate((gas_reactor.thermo.X.copy(), surf.concentrations / surf.site_density)))
+                    enthaplies.append(np.concatenate((gas.standard_enthalpies_RT * ct.gas_constant * gas.T, surf.standard_enthalpies_RT * ct.gas_constant * surf.T)))
+                sens_mat = np.zeros((len(self.species_list) + len(self.reaction_list), len(sensitive_species)))
+                # record sensitivities
+                for j in range(len(sensitive_species)):
+                    for i in range(gas.n_reactions):  # gas reactions
+                        sens_mat[i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), i)
+                    for i in range(gas.n_species):  # gas species
+                        sens_mat[len(self.reaction_list) + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), len(self.reaction_list) + i) * 4.184 * 1e6  # convert from J/kmol to kcal / mol in denominator    
+                    for i in range(n_surf_reactions):  # surface reactions
+                        sens_mat[gas.n_reactions + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), gas.n_reactions + i)
+                    # Not Yet Implemented in Cantera, so we set the values to nan for now and estimate manually later
+                    for i in range(n_surf_species):  # surface species
+                        # sens_mat[len(self.reaction_list) + gas.n_species + i, j] = net.sensitivity(sensitive_species[j].to_chemkin(), len(self.reaction_list) + gas.n_species + i) * 4.184 * 1e6  # convert from J/kmol to kcal / mol in denominator
+                        sens_mat[len(self.reaction_list) + gas.n_species + i, j] = np.nan
+
+                all_sensitivities.append(sens_mat)
+            time_array = np.array(times)
+            temperatures = np.array(temperatures)
+            pressures = np.array(pressures)
+            volumes = np.array(volumes)
+
+            # ------------------------------------------------------------------------------------------
+            # TODO remove this if surface species sensitivty gets implemented in Cantera
+            # or if RMG's SurfaceReactor sensitivity gets implemented
+            # Cantera doesn't have surface species sensitivity implemented, so we need to do this manually here
+            if surface_mech:
+                def perturb_species(species, DELTA_J_MOL=418.4):
+                    # takes in a Cantera species and makes a copy with the enthalpy offset change
+                    # Default of 418 J/mol equals 0.1 kcal/mol
+                    R = 8.3144598  # gas constant in J/mol
+                    # copy the species
+                    input_data = species.input_data.copy()
+                    increase = DELTA_J_MOL / R
+                    for i in range(len(input_data['thermo']['data'])):
+                        input_data['thermo']['data'][i][5] += increase
+                    new_species = ct.Species().from_dict(input_data)
+                    return new_species
+
+                # For the sensitvity plot, we only care about the final timepoint, so use brute force to estimate that
+                for z in range(surf.n_species):
+                    # save a copy of the original species and perturb the enthalpy by 0.1 kcal/mol
+                    original_species = ct.Species().from_dict(surf.species()[z].input_data.copy())
+                    DELTA_J_MOL = 418.4
+                    perturbed_species = perturb_species(surf.species()[z], DELTA_J_MOL=DELTA_J_MOL)
+                    surf.modify_species(z, perturbed_species)
+
+                    # rerun the simulation for each surface species, really unfortunate that it has to be done this way
+                    gas.TPX = T.value_si, P.value_si, initial_mole_fractions
+                    gas_reactor = ct.IdealGasReactor(gas, energy='off')  # constant volume and isothermal to match surface reactor
+                    surf.TP = T.value_si, P.value_si
+                    surf.coverages = initial_surface_coverages
+                    surf_reactor = ct.ReactorSurface(surf, gas_reactor, A=surface_volume_ratio.value_si)  # surface reactor with specified surface area to volume ratio
+                    net = ct.ReactorNet([gas_reactor])
+
+                    net.advance(termination_time.value_si)
+                    # assert np.isclose(net.time, times[-1], rtol=1e-3), 'Perturbed simulation did not reach the same termination time as unperturbed simulation, cannot compute sensitivity'
+                    # compute sensitivity
+                    for j in range(len(sensitive_species)):
+                        if sensitive_species[j].contains_surface_site():
+                            y_perturbed = surf.concentrations[self.species_list.index(sensitive_species[j]) - gas.n_species]  # concentration
+                        else:
+                            y_perturbed = gas_reactor.thermo.X[self.species_list.index(sensitive_species[j])]
+                        y = all_concentrations[-1][self.species_list.index(sensitive_species[j])]
+                        x = original_species.thermo.h(T.value_si)
+                        x_perturbed = surf.species()[z].thermo.h(T.value_si)
+                        if x == 0:
+                            sensitivity = np.nan
+                        else:
+                            sensitivity = ((y_perturbed - y) / y) / ((x_perturbed - x) / x)
+                        all_sensitivities[-1][len(self.reaction_list) + gas.n_species + z, j] = sensitivity
+                    # reset the species back to the original
+                    surf.modify_species(z, original_species)
+            # ------------------------------------------------------------------------------------------
+
+            # Write simulation results to CSV files
+            all_concentrations = np.array(all_concentrations)
+            simulation_outfile = os.path.join(self.output_directory, 'solver', f'simulation_1_{len(self.species_list):d}.csv')
+            with open(simulation_outfile, 'w') as outfile:
+                header = ['Time (s)', 'Volume (m^3)', 'Temperature (K)', 'Pressure (Pa)']
+                for spc in self.species_list:
+                    header.append(spc.to_chemkin())
+                worksheet = csv.writer(outfile)
+
+                # add header row:
+                worksheet.writerow(header)
+
+                # add number of moles:
+                n_moles = np.empty_like(all_concentrations)
+
+                # Use ideal gas law to get total moles of gas
+                total_moles_gas = np.multiply(pressures, volumes) / ((ct.gas_constant / 1000.0) * temperatures)  # in moles, using PV=nRT and converting R to kJ/mol*K
+                n_moles[:, :gas.n_species] = all_concentrations[:, :gas.n_species] * total_moles_gas[:, np.newaxis]  # moles of each species
+
+                if surface_mech:
+                    total_moles_sites = surf_reactor.area * surf.site_density / 1000.0  # in moles, using site density and surface volume ratio
+                    n_moles[:, gas.n_species:] = all_concentrations[:, gas.n_species:] * total_moles_sites  # moles of each surface species
+
+                for t in range(len(time_array)):
+                    row = [time_array[t], volumes[t], temperatures[t], pressures[t]]
+                    # record number of moles
+                    row.extend(n_moles[t, :])  # convert to moles of each species by multiplying mole fraction by total moles
+                    worksheet.writerow(row)
+
+            # Write sensitivities to CSV files, one file per sensitive species
+            for j in range(len(sensitive_species)):
+                with open(sens_worksheet[j], 'w') as outfile:
+                    species_name = sensitive_species[j].to_chemkin()
+                    headers = ['Time (s)']
+
+                    worksheet = csv.writer(outfile)
+                    reactions_above_threshold = []  # includes species too
+                    for i in range(len(self.reaction_list) + len(self.species_list)):
+                        for t in range(len(all_sensitivities)):  # loop over time steps
+                            if abs(all_sensitivities[t][i, j]) > sensitivity_threshold:
+                                reactions_above_threshold.append(i)
+                                break
+
+                    # need conversion from Cantera to RMG and back
+                    headers.extend([f'dln[{species_name}]/dln[k{i + 1}]: {self.reaction_list[i].to_chemkin(kinetics=False)}' if i < len(self.reaction_list)
+                                    else f'dln[{species_name}]/dG[{self.species_list[i - len(self.reaction_list)].to_chemkin()}]' for i in reactions_above_threshold])
+
+                    worksheet.writerow(headers)
+                    for t in range(len(time_array)):
+                        row = [time_array[t]]
+                        row.extend([all_sensitivities[t][i, j] for i in reactions_above_threshold])
+                        worksheet.writerow(row)
+
+            # Plot should be separated from the sensitivity run
+            plot_sensitivity(self.output_directory, reaction_system_index, sensitive_species,
+                             number=number, fileformat=fileformat)
 
     def local_analysis(self, sensitive_species, reaction_system_index=0, correlated=False, number=10,
                        fileformat='.png'):
@@ -917,3 +1123,24 @@ def process_local_results(results, sensitive_species, number=10):
         output += '================================================================================\n\n'
 
     return processed_results, output
+
+
+def make_ct_phases(species_list, reaction_list, surface_site_density=2.7e-5, cantera_file=None):
+    """Make Cantera gas and surface phases with the given species and reactions.
+    It is not yet possible to instantiate a Cantera Interface object by passing objects through memory
+    https://github.com/Cantera/enhancements/issues/216
+    Hence, we initialize surfaces with the text of a yaml file and then add to each phase.
+    """
+    import cantera as ct
+
+    assert cantera_file is not None, 'Cantera file must be provided to use make_ct_phases'
+    surface_mech = any([x.contains_surface_site() for x in species_list])
+    gas = ct.Solution(cantera_file)
+    surf = None
+    if surface_mech:
+        try:
+            surf = ct.Interface(cantera_file, 'surface1', adjacent=[gas])
+        except ct.CanteraError:
+            surf = ct.Interface(cantera_file, 'SURF0', adjacent=[gas])
+        surf.site_density = surface_site_density / 1000.0  # convert from mol/m^2 to kmol/m^2 for Cantera
+    return gas, surf
