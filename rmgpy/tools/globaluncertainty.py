@@ -329,6 +329,7 @@ class ReactorPCEFactory(object):
         # We select the Gauss-Patterson quadrature as it is recommended as the fastest in the
         # Patrick Conrad, Youssef Marzouk paper doi: 10.1137/120890715
         quad_family = muqa.GaussPattersonQuadrature()
+        # quad_family = muqa.ClenshawCurtisQuadrature()  # won't crash as frequently
         # Uniform random variables used chemical kinetics uncertainty propagation uses Legendre polynomials
         poly_family = muqa.Legendre()
 
